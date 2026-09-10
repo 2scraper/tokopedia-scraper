@@ -87,9 +87,15 @@ Measured 2026-09-10, `country-id`, one profile:
     title       119/119
     brand       119/119
     currency    119/119   all IDR
-    image_url    46/119   (39%)  <- correct, see below
-    slug_id      78/119   (66%)  <- correct, see below
+    image_url    46-49/119  (~40%)  <- correct, see below
+    slug_id      76-78/119  (~65%)  <- correct, see below
     scroll settled on both pages after 5 rounds, 60 cards each
+
+Those last two are ranges rather than exact fractions on purpose: both vary
+between runs of the same command. `image_url` depends on how far the lazy
+loader got, and `slug_id` on which products the listing happened to return —
+so a fixed fraction here would be a number that goes stale on the next run,
+and the repo's own numbers should not do that.
 
 And a search grid, same day, same profile:
 
@@ -200,6 +206,50 @@ python playwright_scraper.py \
 python playwright_scraper.py --mode product \
     --url "https://www.tokopedia.com/zayn-snack-448/kopi-hitam-bubuk-robusta-original-berat-1-kg-coffee-kualitas-premium-pahitnya-pas-cocok-untuk-kopi-susu-1731177319241910164"
 ```
+
+### Every flag
+
+Defaults are `playwright_scraper.py`'s. The three engines agree on
+everything in the family's flag contract — and on exit codes, run status and
+whether a run spends money — but they are not flag-identical, and the
+differences are real rather than oversights:
+
+| | difference |
+|---|---|
+| pyppeteer | no `--fingerprint` / `--fp-country` / `--fp-tags` / `--locale`; adds `--chromium-path`. `--concurrency` is accepted for parity and ignored. |
+| Selenium | no `--locale`; adds `--no-sandbox` and `--disable-dev-shm-usage`. `--concurrency` is accepted for parity and ignored. `--cdp-endpoint` and an authenticated `--proxy` do not work at all — see below. |
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--url` | — | The page to read. Required unless `TOKOPEDIA_URL` is set. |
+| `--mode` | `listing` | `listing` or `product`. No shop mode — see Modes. |
+| `--category` | from the URL | Label for the `category` column. |
+| `--pages` | `1` | Listing pages. On a SEARCH url this scrolls further rather than fetching more URLs, because a search has no per-page addresses. |
+| `--delay` | `2.0` | Seconds between pages. |
+| `--concurrency` | `1` | Parallel workers, each with its own browser and its own proxy exit. **Refused above 1 for a search URL**, with the reason. |
+| `--retries` | `3` | Attempts per page LOAD. An empty page is never retried — it is a correct answer. |
+| `--retry-delay` | `2.0` | Seconds before the first retry, doubling after. |
+| `--format` | `both` | `json`, `csv` or `both`. |
+| `--out` | `tokopedia_products` | Output prefix: `<out>.json`, `<out>.csv`, `<out>.meta.json`. |
+| `--locale` | `id-ID` | What the browser claims. Does **not** change the language or the currency — this site serves `lang="id"` and IDR to everyone. |
+| `--proxy` | — | One proxy URL. Credentials never reach the browser's command line. See the access section before relying on it here. |
+| `--proxy-file` | — | A pool, one URL per line. What actually spreads a run's volume. |
+| `--proxy-rotate` | `per-run` | `per-run`, `per-page` or `on-block`. |
+| `--proxy-shuffle` | off | Randomise the pool order at start-up. |
+| `--proxy-block-retries` | `2` | Exits to try when a page comes back blocked. Without a pool the engine re-fetches once instead. |
+| `--twocaptcha-key` | — | Prefer `TWOCAPTCHA_KEY` in `.env`; a key in `argv` is readable by `ps`. |
+| `--captcha-api` | `v2` | `v2` (createTask) or `v1` (the legacy in.php/res.php pair). |
+| `--solve-captcha` | `when-blocked` | `when-blocked` counts product links before paying; `always` solves on any detection. Neither helps with a refusal here, and no challenge has ever been observed on this site. |
+| `--min-score` | `0.7` | reCAPTCHA v3 score to request (`0.3`, `0.7` or `0.9` — the API takes only these). |
+| `--cdp-endpoint` | — | Connect to a running browser, e.g. the Scraping Browser API. **The path that works on this site.** Prefer `TOKOPEDIA_CDP_ENDPOINT`. |
+| `--fingerprint` | off | Fetch and apply a 2Captcha fingerprint. Ignored with `--cdp-endpoint`: the remote browser brings its own. |
+| `--fp-country` / `--fp-tags` | — | Narrow which fingerprint. `--fp-tags` takes ONE OS-family tag, not a list. |
+| `--allow-empty` | off | Write output files even when 0 rows were found. Off by default so a bad run cannot replace last night's good data. |
+| `--dump-html` | — | Save the snapshot the parser was given — **on success too**, because a run can return the right count with a field silently unpopulated. |
+| `--headless` / `--headful` | headless | Ignored with `--cdp-endpoint`. |
+
+Deliberately absent: **`--country`** (one storefront, so it could only
+disagree with the URL) and **`--mode shop`** (unmeasured markup).
 
 ### Which engine can actually reach Tokopedia
 

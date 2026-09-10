@@ -649,6 +649,16 @@ def detect_page_state(html: str, status: Optional[int] = None,
         return "blocked"
     if not html or not html.strip():
         return "blocked"
+    # THE NO-RESULTS SENTENCE COMES FIRST, before the asset threshold, and
+    # the ordering is the point. "Oops, produk nggak ditemukan" is the
+    # site's OWN Indonesian copy — an unambiguous positive signal that
+    # Tokopedia both served this page and has nothing to put on it — while
+    # `served_by_tokopedia` is a heuristic with a threshold. Checked the
+    # other way round, a minimal real page carrying one asset reference
+    # instead of the measured 3-7 was reported as BLOCKED, which is exit 3
+    # for a correct answer and sends the reader hunting for a proxy problem.
+    if is_no_results(html):
+        return "empty"
     if not served_by_tokopedia(html):
         # No asset-host references at all: whatever this is, Tokopedia did
         # not build it.
@@ -657,8 +667,6 @@ def detect_page_state(html: str, status: Optional[int] = None,
     soup = BeautifulSoup(html, "html.parser")
     if _grid_of(soup, listing_kind(url)) is not None and _count_tiles(soup, url):
         return "content"
-    if is_no_results(html):
-        return "empty"
     if listing_kind(url) == "product":
         # A detail page has no grid; what it has is a product. Treat the
         # page's own product markup as the content signal, so an engine in

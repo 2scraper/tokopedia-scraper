@@ -753,6 +753,20 @@ def test_page_state():
                 detect_page_state(empty, 200, SEARCH_URL + "&page=2")
                 == "empty")
 
+    # THE ORDERING MATTERS. "Oops, produk nggak ditemukan" is the site's own
+    # Indonesian copy — an unambiguous positive signal that Tokopedia served
+    # the page and has nothing to put on it — while `served_by_tokopedia` is
+    # a heuristic needing two asset references. Checked the other way round,
+    # a minimal real page carrying ONE reference instead of the measured 3-7
+    # came back as BLOCKED: exit 3 for a correct answer, sending the reader
+    # hunting for a proxy problem that does not exist.
+    thin = ('<html><body><img src="https://images.tokopedia.net/x.png">'
+            '<p>Oops, produk nggak ditemukan</p></body></html>')
+    ok &= check("...even on a page with too few asset references to pass "
+                "the served-by heuristic",
+                not served_by_tokopedia(thin)
+                and detect_page_state(thin, 200, SEARCH_URL) == "empty")
+
     # DETECTION IS INVERTED ON THIS SITE. Tokopedia sends an address it has
     # scored NOTHING — no status code, no interstitial, no vendor marker — so
     # a served page is recognised by the site's OWN asset host and the
@@ -897,6 +911,21 @@ def test_page_flow():
     # capped even though the path is wired up.
     ok &= check("at most one solve is bought per page",
                 page_flow.SOLVES_PER_PAGE == 1)
+
+    # A POLICY CONSTANT NOTHING READS IS THE SAME DEFECT AS DEAD CODE.
+    # `RETRY_ON_BLOCKED` carried a paragraph of justification and no engine
+    # consulted it — they computed their block-retry budget from
+    # `BLOCK_RETRIES_WITHOUT_POOL` alone, so setting it False would have
+    # changed nothing. Both are asserted reachable from every engine now.
+    for name in _ENGINE_MODULES:
+        path = os.path.join(REPO_ROOT, name + ".py")
+        if not os.path.exists(path):
+            continue
+        src = open(path, encoding="utf-8").read()
+        ok &= check("%s consults RETRY_ON_BLOCKED, not just "
+                    "BLOCK_RETRIES_WITHOUT_POOL" % name,
+                    "page_flow.RETRY_ON_BLOCKED" in src
+                    and "page_flow.BLOCK_RETRIES_WITHOUT_POOL" in src)
 
     ok &= check("readiness needs more than one match",
                 page_flow.min_matches("listing") > 1)
@@ -2042,6 +2071,30 @@ def test_captcha():
     return ok
 
 
+def _placeholder_reads_unset(raw):
+    """Whether env_config would treat `raw` as "not configured".
+
+    Goes through the real rule — `env_config.env_value`, which is where the
+    placeholder logic lives — rather than reimplementing it, because a
+    reimplementation is what drifts. The variable is set in os.environ
+    directly and restored afterwards: `load_env` only fills variables that
+    are not already set, so writing a temporary .env would be shadowed by
+    whatever the suite has already loaded.
+    """
+    name = "TOKOPEDIA_CDP_ENDPOINT"
+    saved = os.environ.get(name)
+    try:
+        os.environ[name] = raw
+        with io.StringIO() as buf, redirect_stdout(buf):
+            value = env_config.env_value(name)
+    finally:
+        if saved is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = saved
+    return value is None
+
+
 def test_env_config():
     group("env_config")
     ok = True
@@ -2068,6 +2121,38 @@ def test_env_config():
     # that looks configurable and is not.
     ok &= check("no env variable is mapped onto --out (it has a default)",
                 "out" not in env_config.ENV_KEYS.values())
+
+    # A COPIED .env.example MUST READ AS UNSET, and a literal-only check is
+    # not enough to make that true. This repo documents its two credentialled
+    # URLs the way the vendor does, with the parts you fill in written in
+    # braces:
+    #
+    #     ws://{login}-zone-scraping_browser-…-pid-{profileId}:{password}@…
+    #     http://{user}:{password}@ap.proxy.2captcha.com:2334
+    #
+    # Before the brace check existed the loader reported both of those as
+    # CONFIGURED, so `cp .env.example .env` and a run connected to
+    # cb.2captcha.com with the string `{login}-zone-…` as its username and
+    # got a 401 — a confusing failure a long way from its cause, which is
+    # what §3's rule exists to prevent.
+    for raw in ('ws://{login}-zone-scraping_browser-country-id-pid-'
+                '{profileId}:{password}@cb.2captcha.com:9222',
+                'http://{user}:{password}@ap.proxy.2captcha.com:2334',
+                'your_2captcha_api_key_here'):
+            ok &= check("a placeholder value reads as unset: %s..." % raw[:34],
+                        _placeholder_reads_unset(raw))
+    # ...and a REAL value still reads as set, or the guard has eaten the
+    # feature it was protecting.
+    ok &= check("a real value is not mistaken for a placeholder",
+                _placeholder_reads_unset(
+                    "ws://acct1-zone-scraping_browser-country-id-pid-p1:"
+                    "secret@cb.2captcha.com:9222") is False)
+    # The one variable a copied example leaves USABLE is the target URL,
+    # which carries no credential and is a working default.
+    ok &= check("the example's default URL is usable as-is",
+                _placeholder_reads_unset(
+                    "https://www.tokopedia.com/p/makanan-minuman/minuman/"
+                    "kopi-bubuk") is False)
 
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, ".env")
@@ -2209,6 +2294,40 @@ def test_proxy_pool():
         ok &= check("mask(%r) does not raise" % junk, not raised_here)
     ok &= check("mask() still keeps host and port on a good URL",
                 mask("http://u:p@h.example:8080") == "http://***:***@h.example:8080")
+
+    # PINNED LIMITATION, not a defence. mask() takes a bare URL; given a
+    # SENTENCE containing one it returns "?://?" — the password is gone,
+    # which is the property that matters, but so is the host and port the log
+    # was written to show. Every caller here passes the URL as its own `%s`
+    # argument for that reason, and `_mask_credentials()` is what handles
+    # arbitrary text. Asserting the CURRENT behaviour makes a future swap a
+    # failing check rather than an unreadable log (§10).
+    sentence = "a http://u:supersecret@h.example:8080 b"
+    ok &= check("mask() on a sentence loses the host — the documented limit",
+                mask(sentence) == "?://?")
+    ok &= check("...but never the password", "supersecret" not in mask(sentence))
+    ok &= check("every mask() call site passes a bare URL, not a sentence",
+                not [ln for f in ("playwright_scraper.py", "puppeteer_scraper.py",
+                                  "selenium_scraper.py", "proxy_pool.py")
+                     for ln in open(os.path.join(REPO_ROOT, f),
+                                    encoding="utf-8").read().split("\n")
+                     if re.search(r'[^_]mask\(f?["\']', ln)])
+    # ...and the engines' own masker handles a sentence, globally. A masker
+    # that fixes the first occurrence and prints the password the other four
+    # times looks exactly like one that works.
+    for name in _ENGINE_MODULES:
+        try:
+            mod = __import__(name)
+        except ImportError:
+            continue
+        many = ("x ws://u:supersecret@h:1 y ws://u:supersecret@h:1 "
+                "z http://u:supersecret@h:2")
+        out = mod._mask_credentials(many)
+        ok &= check("%s._mask_credentials masks EVERY occurrence" % name,
+                    "supersecret" not in out)
+        ok &= check("%s._mask_credentials keeps the surrounding text" % name,
+                    out.startswith("x ") and out.endswith(":2")
+                    and "h:1" in out)
     return ok
 
 
@@ -2299,6 +2418,65 @@ def test_engines(skips):
         ok &= check("%s offers exactly the listing and product modes" % name,
                     '"listing", "product"]' in src)
         ok &= check("%s has no shop mode" % name, '"shop"' not in src)
+
+    # THE FLAG CONTRACT, and the exact ways the engines differ from it.
+    #
+    # §9 lists the flags every engine must offer. Checked rather than
+    # trusted, because a flag one engine has and another does not is the
+    # drift page_flow.py and finish_run() exist to prevent, one level up —
+    # and because the README documents these differences by name, so a new
+    # divergence has to update the README or fail here.
+    contract = ("--url --pages --category --format --out --delay --retries "
+                "--retry-delay --concurrency --proxy --proxy-file "
+                "--proxy-rotate --proxy-shuffle --proxy-block-retries "
+                "--twocaptcha-key --captcha-api --solve-captcha --min-score "
+                "--cdp-endpoint --allow-empty --dump-html").split()
+    flags = {}
+    for name in _ENGINE_MODULES:
+        path = os.path.join(REPO_ROOT, name + ".py")
+        if not os.path.exists(path):
+            continue
+        src = open(path, encoding="utf-8").read()
+        flags[name] = set(re.findall(r'add_argument\(\s*"(--[a-z-]+)"', src))
+        missing = [f for f in contract if f not in flags[name]]
+        ok &= check("%s offers every flag in the family contract" % name,
+                    not missing)
+        if missing:
+            print("        missing: %s" % missing)
+        ok &= check("%s offers --headless and --headful" % name,
+                    "--headless" in flags[name] and "--headful" in flags[name])
+    if len(flags) == 3:
+        pw = flags["playwright_scraper"]
+        # The differences the README states, pinned in both directions: a NEW
+        # divergence fails here, and closing one of these also fails here, so
+        # the README cannot quietly go stale either way.
+        ok &= check("pyppeteer differs from playwright by exactly the "
+                    "documented four flags",
+                    sorted(pw - flags["puppeteer_scraper"])
+                    == ["--fingerprint", "--fp-country", "--fp-tags",
+                        "--locale"])
+        ok &= check("selenium differs from playwright by exactly --locale",
+                    sorted(pw - flags["selenium_scraper"]) == ["--locale"])
+
+    # `--fp-tags` MUST DEFAULT TO ONE OS-FAMILY TAG. It shipped in this
+    # family as "Windows,Chrome,Desktop", which the fingerprint API rejects
+    # with HTTP 400 — so --fingerprint failed on every invocation, which is
+    # one of the six defects §16 of the family notes lists. Measured
+    # 2026-09-10 against the live API: `Windows` succeeds;
+    # `Windows,Chrome,Desktop`, `Chrome` and `Desktop` each 400.
+    for name in _ENGINE_MODULES:
+        path = os.path.join(REPO_ROOT, name + ".py")
+        if not os.path.exists(path):
+            continue
+        src = open(path, encoding="utf-8").read()
+        m = re.search(r'--fp-tags"\s*,\s*default="([^"]*)"', src)
+        if m is None:
+            continue          # pyppeteer has no fingerprint flags
+        ok &= check("%s's --fp-tags default is ONE tag the API accepts"
+                    % name,
+                    "," not in m.group(1)
+                    and m.group(1) in ("Windows", "Microsoft Windows",
+                                       "Android"))
 
     # EVERY page_flow CALL IN EVERY ENGINE, CHECKED AGAINST THE REAL
     # SIGNATURE. This is the general form of a bug the first live run of the

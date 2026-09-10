@@ -161,8 +161,8 @@ def detect_recaptcha_v3(html: str, page_url: str) -> Optional[CaptchaChallenge]:
        data-sitekey="..." data-action="..."), with the actual execute()
        call happening inside a bundled JS file, never appearing as
        readable inline script text at all — confirmed live on the sibling
-       farfetch-scraper repo's target,
-       sign-up modal via DevTools inspection. A previous version of this
+       farfetch-scraper repo's target, in its sign-up modal, via DevTools
+       inspection. A previous version of this
        function, which only checked for format 1, reported "no captcha"
        on this exact page despite one being genuinely present — caught by
        manually inspecting the DOM, not by the detector itself, which is

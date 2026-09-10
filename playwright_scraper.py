@@ -748,8 +748,14 @@ def _fetch_one_page(session, args, pool, page_num: int, url: str) -> PageOutcome
     # made the first live run of this engine abandon page 1 on its first
     # block without retrying once.
     has_pool = bool(pool and len(pool) > 1)
-    block_retries = (args.proxy_block_retries if has_pool
-                     else page_flow.BLOCK_RETRIES_WITHOUT_POOL)
+    # `RETRY_ON_BLOCKED` is CONSULTED, not just documented. It was a
+    # constant with a paragraph of justification that no engine read — a
+    # policy statement nothing enforced, which is the same defect as dead
+    # code that looks load-bearing. Setting it False now really does stop
+    # the retry loop.
+    block_retries = 0 if not page_flow.RETRY_ON_BLOCKED else (
+        args.proxy_block_retries if has_pool
+        else page_flow.BLOCK_RETRIES_WITHOUT_POOL)
     # Counted across the whole block-retry loop, not per attempt: a page that
     # keeps coming back as a challenge would otherwise buy one solve per
     # rotation, which is how a run quietly turns into a bill.
@@ -1574,8 +1580,19 @@ def parse_args():
                         "API and apply it to the launched browser. Needs "
                         "--twocaptcha-key. Ignored with --cdp-endpoint, where the "
                         "Scraping Browser supplies its own.")
-    p.add_argument("--fp-tags", default="Windows,Chrome,Desktop",
-                   help="Fingerprint filter tags (default: Windows,Chrome,Desktop)")
+    # ONE OS-family tag, not a list — and the default is what makes
+    # --fingerprint work at all. It shipped as "Windows,Chrome,Desktop" in
+    # this family, which the API rejects with HTTP 400 ("Request parameters
+    # are invalid"), so --fingerprint failed on every invocation. Measured
+    # 2026-09-10: `Windows` succeeds, and `Windows,Chrome,Desktop`, `Chrome`
+    # and `Desktop` each 400. fingerprint_client.py's own --tags help has
+    # said so all along; the engines' default contradicted it.
+    p.add_argument("--fp-tags", default="Windows",
+                   help="ONE OS-family tag for the fingerprint filter: "
+                        "Windows, Microsoft Windows or Android. NOT a list — "
+                        "Chrome, Desktop and Mobile are each rejected by the "
+                        "API with 400, and no combination is accepted. Use "
+                        "--fp-country to narrow further. (default: Windows)")
     p.add_argument("--fp-country", default=None,
                    help="Fingerprint country, ISO 3166-1 alpha-2. Match it to "
                         "your proxy's exit country — a US fingerprint on a "

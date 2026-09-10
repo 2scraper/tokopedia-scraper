@@ -507,8 +507,14 @@ def _fetch_one_page(session, args, pool, page_num: int, url: str) -> PageOutcome
     # no exit to rotate to, but a plain re-fetch is what clears a block on a
     # Scraping Browser profile, so the budget is not zero.
     has_pool = bool(pool and len(pool) > 1)
-    block_retries = (args.proxy_block_retries if has_pool
-                     else page_flow.BLOCK_RETRIES_WITHOUT_POOL)
+    # `RETRY_ON_BLOCKED` is CONSULTED, not just documented. It was a
+    # constant with a paragraph of justification that no engine read — a
+    # policy statement nothing enforced, which is the same defect as dead
+    # code that looks load-bearing. Setting it False now really does stop
+    # the retry loop.
+    block_retries = 0 if not page_flow.RETRY_ON_BLOCKED else (
+        args.proxy_block_retries if has_pool
+        else page_flow.BLOCK_RETRIES_WITHOUT_POOL)
     # Counted across the whole block-retry loop, not per attempt: a page that
     # keeps coming back as a challenge would otherwise buy one solve per
     # rotation, which is how a run quietly turns into a bill.

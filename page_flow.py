@@ -81,8 +81,8 @@ from typing import Callable, List, Optional
 from urllib.parse import urlsplit
 
 from product_parser import (detect_page_state, listing_kind, page_url,
-                            paginates_by_url, served_by_tokopedia,
-                            strip_tracking)
+                            page_number_from_url, paginates_by_url,
+                            served_by_tokopedia, strip_tracking)
 
 logger = logging.getLogger("page_flow")
 
@@ -428,18 +428,13 @@ def next_page_candidates(current_url: str,
                          advertised_hrefs: Optional[List[str]] = None) -> List[str]:
     """Addresses worth trying for the next page, best first."""
     out: List[str] = []
-    built = page_url(current_url, page_number(current_url) + 1)
+    built = page_url(current_url, page_number_from_url(current_url) + 1)
     if built:
         out.append(built)
     for href in advertised_hrefs or []:
         if href and _same_listing(current_url, href) and href not in out:
             out.append(href)
     return out
-
-
-def page_number(url: str) -> int:
-    from product_parser import page_number_from_url
-    return page_number_from_url(url)
 
 
 def _same_listing(current_url: str, candidate: str) -> bool:
@@ -491,24 +486,6 @@ def concurrency_refusal(url: str) -> Optional[str]:
     return (what + ". Workers would each re-fetch the same page. Use a "
             "category listing URL (/p/<cat>/<sub>/<subsub>), which does "
             "paginate with ?page=N, or run with --concurrency 1.")
-
-
-# ---------------------------------------------------------------------------
-# Bounds
-# ---------------------------------------------------------------------------
-def page_bound(html: str, requested: int) -> int:
-    """How many pages are worth fetching, given what the page said.
-
-    Tokopedia publishes neither a result total nor a page count — its search
-    header reads "Menampilkan 1 - 60 barang dari total  untuk …" with the
-    total EMPTY, and after one scroll it claimed 61-180 while the DOM held
-    95. So there is nothing to bound against and the answer is always what
-    was asked for; the run stops when a page adds no new sku.
-
-    Present so an engine has one place to ask, and so that a future edit
-    which finds a real total has somewhere to put it.
-    """
-    return max(1, requested)
 
 
 def comparable(url: str) -> str:

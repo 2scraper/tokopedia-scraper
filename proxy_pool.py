@@ -129,6 +129,16 @@ def mask(url: Optional[str]) -> str:
     live proxy login and password reached a public CI log.
 
     Anything it cannot take apart is redacted whole rather than echoed.
+
+    IT TAKES A BARE URL, NOT A SENTENCE. Given "a http://u:p@h:8080 b" it
+    returns "?://?" — the password is gone, which is the property that
+    matters, but so is the host and port the log was written to show. Every
+    caller in this repo therefore passes the URL as its own `%s` argument
+    and never interpolates it into a message first. For arbitrary text that
+    may contain a credential anywhere, each engine has
+    `_mask_credentials()`, which is a global regex and keeps the rest of the
+    string intact. `smoke_test` pins both behaviours so a future edit that
+    swaps them shows up as a failing check rather than as an unreadable log.
     """
     if not url:
         return "(none)"
