@@ -58,23 +58,51 @@ consumed the old output, it needs rewriting rather than adjusting:
   `linkProductPrice`, `linkProductShopName` and the rest: zero occurrences on
   either page kind five months later.
 
-### Two defects the first live runs found
+### Four defects the first live runs found
 
-Both were in new code, both invisible to the offline suite, and both are
-pinned by checks now.
+Every one was in new code, every one was invisible to a green offline suite,
+and every one is pinned by a check now. This is §16's rule earning itself:
+running the code beats reading it, and running EVERY engine beats running the
+primary one.
 
 - **The readiness wait crashed on `/search`.** Tokopedia's
   Content-Security-Policy has no `unsafe-eval`, and Playwright's
   `wait_for_function` hands the browser a string to evaluate — so the site's
   most obvious URL died with `EvalError` and exit 1. Every readiness wait now
   polls `querySelectorAll` over CDP instead.
+- **Two of the three engines crashed on their FIRST fetch.**
+  `page_flow.classify(html, status, url)` took `status` positionally, while
+  pyppeteer and Selenium call it as `classify(html, url=…)` because neither
+  exposes a response status at that point. `TypeError`, immediately — and
+  invisible to import, `--help`, `compileall`, the AST undefined-name walk
+  and 400+ green assertions, because none of those calls a function the way a
+  live run does. `status` is now optional, and the suite binds every
+  `page_flow.*` and `product_parser.*` call in every engine against the real
+  signature. That check was verified by reverting the fix: it names all six
+  call sites.
 - **A `/p/<slug>` hub reported exit 3.** The bare string `akamai` was in the
   challenge-marker list, and Tokopedia — which is fronted by Akamai — names
   `…clientnsv4-s.akamaihd.net` in its own performance script on every page it
   serves. A marker that matches every page of the site it guards is worse
   than no marker; it is gone, Akamai's actual refusal strings stay, and the
-  vendor check now only refines the reason for a state the policy had already
+  vendor check now only consults markers for a state the policy had already
   given up on.
+- **`page` was 1 on every row of a two-page run**, which made `position`
+  ambiguous: a row from page 2 claimed the same position as one from page 1.
+  The page number is threaded into the parser in all three engines.
+
+### Inherited code that could never run here, removed
+
+- **The DataDome solver** — roughly 240 lines: the slider task, the cookie
+  parsing, the mandatory-proxy fields. Tokopedia has no such page, and an
+  address it has scored gets no response at all rather than an interstitial,
+  so none of it could ever fire. A paid code path that looks load-bearing and
+  cannot run is worse than no code. The absence is pinned by a check.
+- **`price_is_from` and `price_max`** from the row schema, and from
+  `diff_runs`' tracked fields. A Tokopedia tile prints one price, not a
+  range. `sold` and `sold_is_floor` are tracked in their place, as a pair:
+  without the flag a `sold` change is unreadable, since a tile's figure is a
+  floor and a product page's is exact.
 
 ### Known limitations, measured
 
@@ -96,3 +124,8 @@ pinned by checks now.
 - **No challenge of any kind has been observed on this site**, so a solving
   key buys nothing here today. The path is wired up and capped at one solve
   per page.
+- **The Scraper API path returns about 5 products where a browser engine
+  returns 60.** Measured: 200, 416,939 bytes, $0.0005, 5 rows. Tokopedia
+  hydrates its grid from client-side GraphQL only as the page is scrolled, so
+  a single browserless fetch sees the first paint and nothing after it. It
+  cannot read a full listing by construction.
