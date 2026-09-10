@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tokopedia-scraper"
-version = "0.1.0"
+version = "0.1.1"
 description = "Tokopedia scraper: search grids, category listings and product pages."
 readme = "README.md"
 license = "MIT"

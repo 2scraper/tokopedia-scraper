@@ -11,6 +11,72 @@ with it, so nobody discovers it from a bill or from a diff.
 
 ---
 
+## [0.1.1] — 2026-09-10
+
+A pre-publication audit against the family notes, section by section. Five
+defects, all found by checking rather than by reading, all pinned by checks
+now. Two of them made a documented feature not work at all.
+
+> **If you copied `.env.example`, re-check what your run is actually using.**
+> The placeholder check was a literal set, so it caught
+> `your_2captcha_api_key_here` and MISSED the two credentialled URLs, which
+> the file documents the way the vendor does — with the parts you fill in in
+> braces. A copied example therefore read as CONFIGURED, and a run connected
+> to `cb.2captcha.com` with the string `{login}-zone-…` as its username and
+> got a 401 a long way from its cause. Any `{…}` left in a value now reads as
+> unset, and `python3 env_config.py` says so by name.
+
+> **`--fingerprint` never worked.** The engines' `--fp-tags` default was
+> `Windows,Chrome,Desktop`, and the fingerprint API rejects it with HTTP 400
+> — while `fingerprint_client.py`'s own `--tags` help has always said ONE
+> OS-family tag, not a list. Measured against the live API: `Windows`
+> succeeds; `Windows,Chrome,Desktop`, `Chrome` and `Desktop` each 400. Fixed
+> and verified end to end. **This one was in all four sibling repos too**, and
+> each has its own fix.
+
+### Fixed
+
+- A copied `.env.example` read as configured — see above.
+- `--fingerprint` failed on every invocation — see above.
+- **A no-results page could be reported as blocked.** `detect_page_state`
+  checked the served-by-Tokopedia heuristic (two or more asset references)
+  BEFORE the site's own "Oops, produk nggak ditemukan" sentence, so a minimal
+  real page carrying one reference instead of the measured 3-7 came back as
+  exit 3 — a proxy hunt for a correct answer. The unambiguous positive signal
+  now comes first.
+- **`RETRY_ON_BLOCKED` was a policy nothing enforced.** A constant with a
+  paragraph of justification that no engine read: all three computed their
+  budget from `BLOCK_RETRIES_WITHOUT_POOL` alone, so setting it False changed
+  nothing. Now consulted by all three.
+- **Half the CLI was undocumented.** Sixteen real flags appeared in no
+  document — `--out`, `--delay`, `--retries`, `--proxy-file`,
+  `--proxy-rotate`, `--twocaptcha-key`, `--headless`/`--headful` among them.
+  The README now has every flag with its default, and the three engines' flag
+  sets are pinned against the family contract and against each other in both
+  directions, so a new divergence fails a check and closing a documented one
+  does too.
+
+### Removed
+
+- `page_flow.page_bound` (never called, always returned its input) and
+  `page_flow.page_number` (a wrapper that only delegated).
+
+### Documented
+
+- `proxy_pool.mask()` takes a bare URL, not a sentence: given one it returns
+  `?://?` — the password is gone, which is the property that matters, but so
+  is the host and port the log was written to show. Every call site passes the
+  URL as its own argument for that reason, and the limitation is now pinned
+  rather than half-guarded. `_mask_credentials()` is what handles arbitrary
+  text, globally.
+- Two README figures that legitimately vary between runs (`image_url` and
+  `slug_id` coverage on a category run) are stated as ranges rather than as
+  fractions that would go stale on the next run.
+
+467 offline checks, all green.
+
+---
+
 ## [0.1.0] — 2026-09-10
 
 First release as a member of the [2scraper](https://github.com/2scraper)
