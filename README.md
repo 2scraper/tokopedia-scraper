@@ -449,11 +449,35 @@ while another run still holds one.
 **Proxies** would be the cheaper path and are not currently usable from a
 browser here — see the access section.
 
-**Captcha solving** buys nothing on this site today. No challenge of any kind
-has been observed, and a refusal is not a page. The path is wired up because
-a bot manager can be switched on between deploys, capped at one solve per
-page so a speculative path cannot become a bill, and `--solve-captcha
-when-blocked` (the default) counts product links before spending anything.
+**Captcha solving** buys nothing on this site today — but the machinery is
+there, which is worth knowing before you decide that.
+
+**No challenge of any kind was rendered on any page**, across 13 dumps: six
+captures on two page kinds from two exit countries, and every live run. Zero
+reCAPTCHA, zero hCaptcha, zero Turnstile, zero DataDome, zero PerimeterX,
+zero Incapsula, zero Kasada, zero AWS WAF, and no Akamai refusal page. (The
+`cf-turnstile` strings in a raw dump fetched over `--cdp-endpoint` are the
+Scraping Browser's own auto-solve extension injecting its hunters into every
+page it loads — stripped before markers are looked for, and the reason
+`cf-turnstile` is deliberately not in this repo's marker set.)
+
+**But Tokopedia ships the mount point and the key on every page it serves:**
+
+    <captcha-widgets></captcha-widgets>            empty, on 13 of 13 dumps
+    "CAPTCHA_SITE_KEY":"6L…"                       in its front-end config
+
+So the site has reCAPTCHA configured and simply does not render it to an
+anonymous visitor reading listings. It presumably can — on sign-in, checkout,
+or for an address it is unsure about. The detection therefore covers the five
+shapes that would appear if it did: the loader, a rendered widget's `anchor`
+and `bframe` iframes, a bare `data-sitekey`, and — structurally, because the
+bare tag is on every page and matching it would report a challenge
+everywhere — that mount point having any content at all.
+
+A refusal, meanwhile, is still not a page: there is nothing to solve there
+whatever happens. The solve path is capped at one purchase per page so a
+speculative path cannot become a bill, and `--solve-captcha when-blocked`
+(the default) counts product links before spending anything.
 
 **Fingerprints** (`--fingerprint`) use the same key on a separate
 subscription. Ignored with `--cdp-endpoint`: the remote browser brings its

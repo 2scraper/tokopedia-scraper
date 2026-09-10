@@ -563,14 +563,48 @@ _ASSET_MIN_MATCHES = 2
 # guard is worse than no marker. Akamai's actual REFUSAL strings are the two
 # below, and those do not appear on a served page.
 BOT_CHALLENGE_MARKERS = (
-    "Request unsuccessful",   # Akamai's own refusal page
-    "Reference #",            # ...and its reference line
+    "Request unsuccessful",       # Akamai's own refusal page
+    "Reference #",                # ...and its reference line
     "g-recaptcha",
-    "recaptcha/api.js",
+    "recaptcha/api.js",           # the loader
+    "recaptcha/api2/anchor",      # a RENDERED widget's iframe
+    "recaptcha/api2/bframe",      # ...and its challenge frame
+    "data-sitekey",               # any vendor's widget, configured in markup
     "hcaptcha.com",
     "px-captcha",
     "_Incapsula_Resource",
 )
+
+# THE SITE'S OWN CAPTCHA MOUNT POINT, and it needs a structural check rather
+# than a marker.
+#
+# Tokopedia ships `<captcha-widgets></captcha-widgets>` on EVERY page it
+# serves — 13 of 13 dumps, including the empty-result page and a discovery
+# hub — and its front-end config carries a reCAPTCHA sitekey
+# (`"CAPTCHA_SITE_KEY":"6L…"`). So the machinery is present and configured
+# everywhere, and NOTHING was ever rendered into it: no challenge of any kind
+# appeared on any capture or any live run.
+#
+# That makes the bare tag useless as a marker — matching it would report a
+# challenge on every page, which is the mistake the bare string "akamai"
+# already made here once. What IS a signal is the element having CONTENT.
+_WIDGET_MOUNT_RE = re.compile(
+    r'<captcha-widgets\b[^>]*>(?P<body>.*?)</captcha-widgets\s*>',
+    re.I | re.S)
+
+
+def captcha_widget_is_populated(html: str) -> bool:
+    """Whether the site's own `<captcha-widgets>` mount point has anything in it.
+
+    Empty on every page Tokopedia has ever been observed serving. If it ever
+    has children, the site has rendered a challenge into it — and that is
+    worth knowing even when the child carries none of the vendor markers
+    above, which a bare `data-sitekey` div would not.
+    """
+    for m in _WIDGET_MOUNT_RE.finditer(html or ""):
+        if m.group("body").strip():
+            return True
+    return False
 
 _EXTENSION_TAG_RE = re.compile(
     r'<script\b[^>]*\bsrc\s*=\s*["\'](?:chrome|moz)-extension://[^"\']*["\'][^>]*>'
@@ -614,6 +648,10 @@ def detect_bot_challenge(html: str, url: str = "") -> Optional[str]:
     for marker in BOT_CHALLENGE_MARKERS:
         if marker.lower() in lowered:
             return marker
+    # The site's own mount point, checked structurally rather than as a
+    # substring — see `captcha_widget_is_populated`.
+    if captcha_widget_is_populated(cleaned):
+        return "captcha-widgets"
     return None
 
 

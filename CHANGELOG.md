@@ -11,6 +11,53 @@ with it, so nobody discovers it from a bill or from a diff.
 
 ---
 
+## [0.1.2] — 2026-09-10
+
+Captcha detection, after being asked a question the artefacts could answer:
+were any captchas encountered on this site?
+
+**No — and the site is configured for one on every page**, which turned out
+to matter. 13 dumps scanned (six captures across two page kinds and two exit
+countries, plus every live run's snapshot): zero reCAPTCHA, zero hCaptcha,
+zero Turnstile, zero DataDome, zero PerimeterX, zero Incapsula, zero Kasada,
+zero AWS WAF, no Akamai refusal page, no challenge iframe, no `data-sitekey`
+in served markup. The `cf-turnstile` strings in a raw `--cdp-endpoint` dump
+are the Scraping Browser's own auto-solve extension injecting its hunters —
+stripped before any marker scan, and the reason `cf-turnstile` is not in this
+repo's marker set.
+
+But two things survive that strip, on every page the site serves:
+
+    <captcha-widgets></captcha-widgets>     an EMPTY custom element
+    "CAPTCHA_SITE_KEY":"6L…"                a reCAPTCHA key in its config
+
+So Tokopedia has reCAPTCHA wired and does not render it to an anonymous
+visitor reading listings. Testing the shapes it would take if it did found
+three the detection missed.
+
+### Fixed
+
+- **A rendered widget was not detected.** The marker set had the loader
+  (`recaptcha/api.js`) but neither of a rendered widget's iframes. Added
+  `recaptcha/api2/anchor` and `recaptcha/api2/bframe`.
+- **A widget configured by attribute alone was not detected.** Added
+  `data-sitekey`, which is any vendor's widget declared in markup.
+- **The site's own mount point having content was not detected**, and could
+  not be added as a substring: the bare
+  `<captcha-widgets></captcha-widgets>` is on 13 of 13 dumps, so matching the
+  tag would report a challenge on every page — the same mistake the bare
+  string `akamai` made in 0.1.0. `captcha_widget_is_populated()` checks the
+  element for non-whitespace content instead.
+
+All three are pinned in both directions, together with a re-check that the
+three committed fixtures still report clean — every broadening of a marker
+set risks the "matches every page" failure, so it is verified rather than
+argued about.
+
+479 offline checks, all green.
+
+---
+
 ## [0.1.1] — 2026-09-10
 
 A pre-publication audit against the family notes, section by section. Five

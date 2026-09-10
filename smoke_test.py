@@ -874,6 +874,66 @@ def test_page_state():
                 detect_bot_challenge(
                     "Request unsuccessful. Reference #18.2f Access Denied")
                 == "Request unsuccessful")
+
+    # THE SITE'S OWN CAPTCHA MOUNT POINT. Tokopedia ships
+    # `<captcha-widgets></captcha-widgets>` on EVERY page it serves — 13 of 13
+    # dumps, including the empty-result page and a discovery hub — and its
+    # front-end config carries a reCAPTCHA sitekey ("CAPTCHA_SITE_KEY":"6L…").
+    # So the machinery is present and configured everywhere, and nothing was
+    # ever rendered into it: no challenge of any kind appeared on any capture
+    # or any live run.
+    #
+    # Which makes the bare tag useless as a marker — matching it would report
+    # a challenge on every page, the mistake the bare string "akamai" already
+    # made here once. What IS a signal is the element having CONTENT, so it
+    # gets a structural check. Both directions are pinned.
+    site_key = "6L" + "d" * 38
+    ok &= check("the EMPTY mount point every real page ships is NOT a "
+                "challenge",
+                not product_parser.captcha_widget_is_populated(
+                    "<captcha-widgets></captcha-widgets>")
+                and detect_bot_challenge(
+                    page('<captcha-widgets></captcha-widgets>')) is None)
+    ok &= check("...and whitespace-only content is not either",
+                not product_parser.captcha_widget_is_populated(
+                    "<captcha-widgets>\n  </captcha-widgets>"))
+    populated = page('<captcha-widgets><div id="tkpd-cap">'
+                     '<span>Verifikasi</span></div></captcha-widgets>')
+    ok &= check("a POPULATED mount point is a challenge, even with no vendor "
+                "attribute in it",
+                detect_bot_challenge(populated) == "captcha-widgets"
+                and detect_page_state(populated, 200, SEARCH_URL)
+                == "challenge")
+
+    # A RENDERED widget, in the two shapes the site's own configured
+    # reCAPTCHA would take. Neither was caught before: the marker set had the
+    # loader (`api.js`) but not the widget's iframes, and not a bare
+    # `data-sitekey` on a child of the mount point.
+    for label, markup, want in (
+            ("a rendered reCAPTCHA anchor iframe",
+             '<iframe src="https://www.google.com/recaptcha/api2/anchor?k=%s">'
+             '</iframe>' % site_key, "recaptcha/api2/anchor"),
+            ("its challenge frame",
+             '<iframe src="https://www.google.com/recaptcha/api2/bframe?k=%s">'
+             '</iframe>' % site_key, "recaptcha/api2/bframe"),
+            ("a widget configured by attribute alone",
+             '<div id="x" data-sitekey="%s"></div>' % site_key,
+             "data-sitekey")):
+        ok &= check("%s is detected" % label,
+                    detect_bot_challenge(page(markup)) == want)
+
+    # AND THE WHOLE CORPUS MUST STAY CLEAN. Every broadening of this set risks
+    # the "matches every page" failure, so it is re-checked against all three
+    # committed fixtures rather than argued about.
+    for label, fixture in (("SEARCH", SEARCH), ("CATEGORY", CATEGORY),
+                           ("DETAIL", DETAIL)):
+        ok &= check("no challenge is reported on the %s fixture" % label,
+                    detect_bot_challenge(fixture) is None)
+        ok &= check("...and its mount point is empty, as the site ships it"
+                    % () if False else
+                    "...and the %s fixture's mount point is empty, as the "
+                    "site ships it" % label,
+                    not product_parser.captcha_widget_is_populated(fixture))
     return ok
 
 
