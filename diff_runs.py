@@ -46,17 +46,18 @@ from typing import Dict, List, Optional, Tuple
 
 from output_writer import UNIQUE_BY_SKU_MODES
 
-# `price_is_from` and `price_max` are tracked alongside the price on purpose.
-# On Etsy a listing with variations prints a MINIMUM ("ab 34,00 €"), and a
-# seller changing their variation range moves `price_max` — or flips
-# `price_is_from` — while `price` itself holds still. A monitor watching only
-# `price` would report "no change" on a listing whose top price doubled.
+# `sold` is tracked alongside the price, and `sold_is_floor` with it, because
+# without the flag a `sold` change is unreadable: a tile's figure is a floor
+# the site rounded down ("100rb+ terjual" = 100_000) while a product page's
+# is exact (207785 for that same product). A monitor watching `sold` alone
+# would report a jump of 107,785 the moment someone diffed a listing run
+# against a product run, and none of it would be a sale.
 #
-# `price_is_from` flipping is also the one case where a `price` that did not
-# move can still mean something different: 34.00 as a fixed price and 34.00
-# as "from 34.00" are not the same offer.
-TRACKED_FIELDS = ("price", "original_price", "price_is_from", "price_max",
-                  "discount_pct", "currency", "in_stock")
+# No `price_is_from` / `price_max` here: a Tokopedia tile prints one price,
+# not a range. If variant pricing ever appears on a listing page, this is
+# where it goes.
+TRACKED_FIELDS = ("price", "original_price", "discount_pct", "currency",
+                  "in_stock", "sold", "sold_is_floor", "rating")
 
 # The subset of TRACKED_FIELDS whose comparability depends on price_source
 # matching between the two runs — see diff_products.
@@ -95,9 +96,10 @@ def _within_tolerance(before: dict, after: dict, changes: dict,
     because the alternative is a comment inventing a reason. A sibling repo
     needs it: that site converts prices for a cross-border visitor and the
     exchange rate ticks between two runs of the same command. NO EQUIVALENT
-    ETSY BEHAVIOUR WAS MEASURED — each storefront quotes its own
-    market in its own currency, so a run has no conversion in it and every
-    cent of a difference is a real price move.
+    TOKOPEDIA BEHAVIOUR WAS MEASURED — the site quotes IDR to every visitor,
+    verified identical from an Indonesian and a US exit with zero price
+    differences across the 68 products both runs saw, so a run has no
+    conversion in it and every rupiah of a difference is a real price move.
 
     So the flag stays available and DEFAULTS TO ZERO, which makes it inert
     unless someone deliberately asks for it. Set it to something non-zero
@@ -274,20 +276,23 @@ def _check_comparable(args) -> bool:
             f"detail row carry different fields, so `added`/`removed` would "
             f"describe the mode change rather than the catalogue.")
 
-    # DIFFERENT STOREFRONTS, WHICH `source` CANNOT CATCH ON THIS SITE.
+    # A CURRENCY MISMATCH, which on this site should be impossible — and is
+    # checked anyway.
     #
-    # The sibling repos guard this with `source`: eleven country hostnames,
-    # so a run of mediamarkt.at against mediamarkt.de is refused on the
-    # hostname alone. Etsy is ONE host — every market is a path prefix — so
-    # `source` is "tokopedia.com" on both sides and the family's protection
-    # silently does not apply here.
+    # The sibling repos guard cross-storefront diffs with `source`: eleven
+    # country hostnames, so a run of one against another is refused on the
+    # hostname alone. Tokopedia is ONE host with ONE currency — measured
+    # 2026-09-10, an Indonesian exit and a US exit returned identical markup,
+    # identical `<html lang="id">`, IDR prices both times and zero price
+    # differences across the 68 products both runs saw — so `source` is
+    # "tokopedia.com" on both sides and there is no storefront split for it
+    # to catch.
     #
-    # The currency is what betrays it, and the artefact is total. Measured
-    # 2026-09-10 on one shop captured from a US exit and a German one, 39
-    # listings in both: every single row reported a price change, at a
-    # constant 0.935 ratio, because Etsy converts at a live rate. Four titles
-    # differed too, because Etsy translates some of them. `--fail-on-change`
-    # would have fired on a catalogue that had not moved at all.
+    # This check is therefore expected never to fire, and it is kept for one
+    # reason: if it EVER does, it means either the site has grown a second
+    # currency or something in this repo is inventing them, and both of those
+    # make every row's price incomparable. A guard that costs nothing and
+    # fails loudly beats discovering it from a diff.
     currencies = {}
     for label, path in (("--old", args.old), ("--new", args.new)):
         try:
@@ -304,11 +309,12 @@ def _check_comparable(args) -> bool:
                 f"comparable with each other, let alone with another run's.")
     if len(set(currencies.values())) > 1:
         problems.append(
-            f"the two runs quote different currencies ({currencies}). Etsy "
-            f"serves a different storefront per exit country and converts "
-            f"prices at a live rate, so EVERY row would report a change that "
-            f"is the exchange rate rather than the seller. `source` cannot "
-            f"catch this on Etsy: it is 'tokopedia.com' for every storefront.")
+            f"the two runs quote different currencies ({currencies}). "
+            f"Tokopedia quotes IDR to every visitor — verified identical from "
+            f"two exit countries — so this should be impossible: either the "
+            f"site has grown a second currency or one of these runs invented "
+            f"one, and either way every row's price is incomparable. "
+            f"`source` cannot catch it: it is 'tokopedia.com' on both sides.")
 
     if not problems:
         return True
@@ -338,8 +344,8 @@ def parse_args():
                    help="Treat a price move smaller than PCT%% as an exchange-"
                         "rate tick rather than a price change: reported "
                         "separately and ignored by --fail-on-change. Default 0 "
-                        "(report every cent), which is what a Etsy run "
-                        "wants: each country site quotes its own currency, so "
+                        "(report every rupiah), which is what a Tokopedia "
+                        "run wants: the site quotes IDR to every visitor, so "
                         "there is no conversion drift to absorb. The flag is "
                         "inherited from this scraper family; set it non-zero "
                         "only with a reason you can state.")

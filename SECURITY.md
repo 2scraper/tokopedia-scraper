@@ -53,7 +53,7 @@ In scope:
 
 Not because these do not matter, but because they belong somewhere else:
 
-- **Bypassing Etsy's bot protection.** This scraper drives an ordinary
+- **Bypassing Tokopedia's bot protection.** This scraper drives an ordinary
   browser and passes challenges the way a browser does. Anything about how
   Akamai or reCAPTCHA behave is not a vulnerability in this repository.
 - **The scraper stopped working.** Etsy changing its markup is expected —

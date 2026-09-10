@@ -237,8 +237,23 @@ def scroll_until_settled(count: Callable[[str], int],
 # ---------------------------------------------------------------------------
 # State
 # ---------------------------------------------------------------------------
-def classify(html: Optional[str], status: Optional[int], url: str) -> str:
-    """The page's state, in one place, for all three engines."""
+def classify(html: Optional[str], status: Optional[int] = None,
+             url: str = "") -> str:
+    """The page's state, in one place, for all three engines.
+
+    `status` is OPTIONAL, and that default is load-bearing rather than
+    tidy. Playwright hands back a response object with a status on it;
+    pyppeteer and Selenium do not expose one at the point this is called, so
+    they pass only the markup. When `status` was required positionally both
+    of those engines crashed with `TypeError` on their FIRST fetch — and
+    that was invisible to import, to `--help`, to `compileall`, to the AST
+    undefined-name walk and to 426 green offline checks, because none of
+    them calls a function the way a live run does.
+
+    `test_engines` now checks every `page_flow.*` call in every engine
+    against this module's real signatures, which is the general form of that
+    bug.
+    """
     if html is None:
         # No markup reached us at all. On this site that is what a refusal
         # looks like, so it is `blocked` rather than a crash.

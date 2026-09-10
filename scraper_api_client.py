@@ -15,35 +15,47 @@ tiny container or a lambda.
 
 WHAT THIS SITE NEEDS — READ THIS FIRST
 --------------------------------------
-Etsy is a BAD fit for a browserless path, and this client is here for
-completeness rather than as a recommendation. Measured 2026-09-09: a
-`tasks/sync` fetch of a search URL returned an upstream **HTTP 403** with a
-797-byte DataDome shell. The Scraper API's own exit is a datacentre address,
-and Etsy refuses those outright — see the README's access table.
+Tokopedia is a POOR fit for a browserless path, and this client is here for
+completeness rather than as a recommendation. It works, and it returns a
+FRACTION of the products.
 
-It is kept because it costs nothing to keep, because the API can be pointed
-at a Scraping Browser session with `--cdp-url` (which is the path that does
-work), and because a browserless fetch is genuinely the right tool on other
-sites in this family. If you are reading this because your run came back
-empty: use `playwright_scraper.py --cdp-endpoint` instead.
+Measured 2026-09-10, `tasks/sync` routed through a Scraping Browser session
+against a category listing:
 
-What the request would need to succeed is a residential exit, and this API
-does not take a proxy of its own.
+    upstream status   200
+    HTML              416,939 bytes
+    products parsed   5
+    cost              $0.0005
+
+Five, against **60** from the same URL through `playwright_scraper.py`. The
+reason is structural rather than fixable here: Tokopedia hydrates its grid
+from client-side GraphQL, 60 tiles at a time, and only as the page is
+SCROLLED. A single fetch captures whatever the first paint happened to
+contain — about five tiles on a category page, and on a SEARCH page zero,
+because a search grid has no server-rendered container at all.
+
+So this path cannot see a full listing, by construction. It is kept because
+it costs nothing to keep, because `--cdp-url` routes it through a Scraping
+Browser session (which is what makes it reach the site at all — its own exit
+is a datacentre address, and Tokopedia answers those with nothing), and
+because a browserless fetch is genuinely the right tool on other sites in
+this family where the grid is server-rendered.
+
+If you are reading this because your run came back with five rows: that is
+this client working correctly. Use `playwright_scraper.py --cdp-endpoint`,
+which scrolls.
 
 Usage
 -----
-    # plain HTTP, no browser anywhere
+    # routed through a Scraping Browser API session, which is what makes it
+    # reach the site at all
     python3 scraper_api_client.py \
-        --key "$TWOCAPTCHA_KEY" \
-        --url "https://www.etsy.com/search?q=handmade+mug"
+        --url "https://www.tokopedia.com/p/makanan-minuman/minuman/kopi-bubuk" \
+        --cdp-url "ws://user:pass@cb.2captcha.com:9222" --timeout 90
 
-    # routed through a Scraping Browser API session, which is one way to get
-    # challenge on the way
-    python3 scraper_api_client.py \
-        --key "$TWOCAPTCHA_KEY" \
-        --url "https://www.etsy.com/search?q=handmade+mug" \
-        --cdp-url "ws://user:pass@cb.2captcha.com:9222" \
-        --wait-text 's-search-result' --timeout 90
+    # the key comes from $TWOCAPTCHA_KEY and the endpoint from
+    # $TOKOPEDIA_CDP_ENDPOINT, so neither needs to be typed — a secret in
+    # argv is readable by anything that can run `ps`
 
 Requires: pip install -r requirements.txt
           (no playwright/selenium/pyppeteer needed for this engine)
@@ -164,8 +176,8 @@ def fetch_html(args) -> str:
     upstream_status = body.get("status")
     logger.info("Upstream page status %s, %d bytes of HTML.", upstream_status, len(html))
     # The STATUS is returned alongside the HTML, not thrown away. It used to
-    # be, and that cost this engine the family's central distinction: a 403
-    # from Etsy carries a DataDome shell whose `t` field says whether
+    # be, and that cost this engine the family's central distinction. On this
+    # site a refusal carries no markup at all — nothing a challenge check
     # on it, so the challenge check below finds nothing and the run fell
     # through to "0 products" and exit 4. A pipeline branching on the exit
     # code then reads a block as an empty category. See detect_page_state,
@@ -222,11 +234,12 @@ def _run_once(args, attempt: int = 1, attempts: int = 1) -> int:
         with open(dump, "w", encoding="utf-8") as f:
             f.write(html)
         logger.error(
-            "Etsy refused the Scraper API's request (upstream HTTP %s, "
-            "%d bytes) — saved to %s. Measured 2026-09-09: the Scraper API's "
-            "own exit is refused by this site, while the same task routed "
-            "through a residential browser session returns the full page. "
-            "Pass --cdp-url. This is exit 3, distinct from an empty result "
+            "Tokopedia did not serve the Scraper API's request (upstream "
+            "HTTP %s, %d bytes) — saved to %s. Measured 2026-09-10: the "
+            "Scraper API's own exit is a datacentre address, and this site "
+            "answers those with NOTHING, while the same task routed through "
+            "a Scraping Browser session returned 200 and 417 KB. Pass "
+            "--cdp-url. This is exit 3, distinct from an empty result "
             "(exit 4).", upstream_status, len(html), dump)
         return 3
 
@@ -258,12 +271,13 @@ def _run_once(args, attempt: int = 1, attempts: int = 1) -> int:
 
 def parse_args():
     p = argparse.ArgumentParser(
-        description="Etsy scraper — 2captcha Scraper API edition (no "
-                    "local browser). These pages need no JavaScript, so this "
-                    "path loses nothing — but the request still has to leave "
-                    "from a residential address, and the Scraper API's own "
-                    "exit is refused by this site. Pass --cdp-url; see this "
-                    "file's docstring for the measured numbers.")
+        description="Tokopedia scraper — 2captcha Scraper API edition (no "
+                    "local browser). NOTE: these pages DO need JavaScript, "
+                    "and their grid hydrates only as the page is scrolled, "
+                    "so a single fetch returns about 5 products where a "
+                    "browser engine returns 60. Pass --cdp-url to reach the "
+                    "site at all; see this file's docstring for the measured "
+                    "numbers, and prefer playwright_scraper.py.")
     # NOT required: prefer the TWOCAPTCHA_KEY env var. A key passed on the
     # command line is visible to anyone who can run `ps`, and it lands in
     # shell history and in any log that echoes the command line.
@@ -271,8 +285,10 @@ def parse_args():
                    help="2captcha.com API key (sent as a Bearer token). "
                         "Defaults to $TWOCAPTCHA_KEY, which is the safer way to pass it.")
     p.add_argument("--url", default=None,
-                   help="Etsy listing URL (/search?q=..., /c/<taxonomy>, "
-                        "/market/<term> or /shop/<name>). Required, unless "
+                   help="Tokopedia listing URL — a category listing "
+                        "(/p/<cat>/<sub>/<subsub>) is the only kind this path "
+                        "can read at all, since a search grid has no "
+                        "server-rendered container. Required, unless "
                         "TOKOPEDIA_URL is set in the environment or in .env.")
     p.add_argument("--category", default=None, help="Label to tag output rows with. Defaults to the category segment of the URL, so the column is never empty just because the flag was omitted.")
     p.add_argument("--format", choices=["json", "csv", "both"], default="both")

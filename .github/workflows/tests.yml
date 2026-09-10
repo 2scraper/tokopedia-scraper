@@ -1,6 +1,6 @@
 name: tests
 
-# Runs the offline suite only. Nothing here touches etsy.com, 2captcha.com
+# Runs the offline suite only. Nothing here touches tokopedia.com, 2captcha.com
 # or any credential — GitHub Actions has no key, and a CI job that hits a live
 # site fails for reasons that have nothing to do with the commit.
 on:

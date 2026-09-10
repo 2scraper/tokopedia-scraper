@@ -40,21 +40,31 @@ not the check caught it.
 
 ## Reporting a site change
 
-Etsy changing its markup is the normal way this stops working, and it
-has its own issue template. The detail that saves the most time is which of
-the two paths broke, because on THIS site they run in the opposite order from
-the rest of the family:
+Tokopedia changing its markup is the normal way this stops working, and it
+has its own issue template. The detail that saves the most time is WHICH
+anchor broke, because on this site there is no structured data on a listing
+page to fall back on — measured zero `application/ld+json`, zero
+`__NEXT_DATA__` and zero Apollo state across six captures — so the DOM is
+not the primary path by preference, it is the only one.
 
-1. **The DOM tiles** — `div[data-listing-id]`, which is Etsy's own attribute
-   and the PRIMARY path here. Etsy's JSON-LD covers only 8 of the 64
-   listings a search page renders, so a structured-data-first parser would
-   silently drop most of a page.
-2. **JSON-LD** — the `ItemList` on a listing page, or the `Product` on a
-   detail page. Used to ENRICH and cross-check: it supplies `in_stock`, half
-   the `brand` coverage, and the confirmation behind `price_source`.
-3. **The `/listing/<id>` URL pattern**, which logs a warning when it runs,
-   because it means no tile matched at all and every column except `url` and
-   `sku` is now read out of whatever markup surrounded the link.
+1. **The grid container.** `[data-testid="divSRPContentProducts"]` on a
+   search page, `[data-ssr="productsCategoryL2/L3SSR"]` on a category
+   listing. If one of these moves the run reports 0 rows and exit 4, which
+   is loud.
+2. **The tile marker.** `[data-testid="imgLeg-c"]` on a search page (one per
+   tile), `[data-testid="divProductWrapper"]` inside
+   `a[data-testid="lnkProductContainer"]` on a category listing.
+3. **The reading ORDER inside the tile** — badge, title, price, was-price,
+   rating, sold, shop, location. The field reads rest on it, deliberately,
+   because the classes around each field are build hashes:
+   `<span class="+tnoqZhn89+NHUA43BpiJg==">` is the title today. If Tokopedia
+   reorders a tile, `title` and the prices are what break.
+4. **`span.flip`**, the shop name and the shop's city in that order, exactly
+   two per search tile.
+
+The one place structured data does exist is a DETAIL page's
+`window.__cache` Apollo blob, which is where `--mode product` reads the real
+product id, the exact sold count and the review count.
 
 A third thing can break without any path failing: the **join** between the
 tiles and the structured data. When it breaks, the row count and the prices
@@ -118,15 +128,22 @@ silently regress:
   detail page, where two listings of one shop report 825 and 375 reviews
   while their shop reports 16,679. Folding them into one column would make it
   mean different things in different modes.
-- **`is_ad` comes from the tile link's `ls` parameter, never from the label.**
-  Etsy writes "Anzeige" on a German page and "Ad from shop" on an English
-  one, so a text marker catches one locale and silently lets paid placements
-  through on every other. The parameter agreed with the label 280 times out of
-  280 across four captures.
-- **A `t=bv` DataDome page is NOT handed to the solver.** The cookie a solve
-  returns for one is rejected, so paying for it spends money to learn
-  nothing. Only `t=fe` is solvable. `page_flow.STATE_POLICY` holds that as
-  data so the three engines cannot disagree about it.
+- **`sku` is the `/{shop}/{slug}` URL path, NOT the 19-digit tail most
+  slugs end in.** That tail is not the product id — the id Tokopedia's own
+  app deep links use is `103490518624` for a product whose tail is
+  `1731177319241910164` — and 4 of 40 listing URLs have no tail at all. A
+  tail-derived sku would have been a different number than the site's and
+  null on a tenth of every run, with nothing to say so.
+- **`sold` is a FLOOR on a listing row and exact on a product row**, and
+  `sold_is_floor` is what says which. A tile prints `100rb+ terjual` for a
+  product whose own page states `countSold` 207785. Without that flag one
+  column would silently mean two things.
+- **A block is not a page here.** Tokopedia answers an address it has scored
+  with nothing at all, so there is no challenge to solve and a solving key
+  buys nothing. Block detection is INVERTED: a served page is recognised by
+  the site's own asset host and the absence of one is the signal.
+  `page_flow.STATE_POLICY` holds the retry/solve/blocked decision as data so
+  the three engines cannot disagree about it.
 - **A run that finds nothing writes nothing.** It must not replace a good output
   file with `[]`. `--allow-empty` is the opt-out.
 - **Exit codes are a contract**, not decoration: `0` ok, `1` crash, `2` bad
@@ -140,17 +157,22 @@ silently regress:
   rotating the exit blames an address for the URL it was given.
   `page_flow.STATE_POLICY` holds that for all three engines so they cannot
   disagree about it.
-- **A challenge marker is not a block when products have already rendered.**
-  This one has bitten already: the Scraping Browser API's auto-solve
-  extension injects `cf-turnstile` into every page it loads, and the first
-  live run reported exit 3 on a 1.8 MB page holding the full catalogue.
-  Extension-injected scripts are stripped before markers are looked for.
+- **A challenge marker is only consulted for a state already counted as
+  blocked**, and a marker that matches every page of the site is not a
+  marker at all. This has bitten twice in this family: the Scraping Browser
+  API's auto-solve extension injects `cf-turnstile` into every page it
+  loads (so extension scripts are stripped before markers are looked for,
+  and `cf-turnstile` is deliberately not in the list here), and the bare
+  string `akamai` was in this repo's own list while Tokopedia — which is
+  fronted by Akamai — names `akamaihd.net` in its own performance script on
+  every page it serves. A live run of a hub reported exit 3 on a 191 KB
+  page the site had plainly served.
 - **A sku already written by an earlier page of the same run is dropped, not
-  duplicated.** Etsy's own pagination does not repeat (0 skus shared
-  across three consecutive pages, measured), so this guards against a
-  re-fetch rather than against the site — and a non-zero drop count in a run
-  log is worth looking at rather than routine. See `dedupe_by_key` in
-  `output_writer.py`.
+  duplicated.** Unlike its sibling repos this DOES fire on healthy runs
+  here: page 1 and page 2 of one category listing shared exactly 3 products,
+  all three from the "cheaper products" carousel that appears on every page.
+  So a small non-zero drop count is expected and a large one is not. See
+  `dedupe_by_key` in `output_writer.py`.
 
 There is also a naming check: certain phrases are banned repo-wide and the suite
 fails naming them. If it trips, read the message — the phrase is wrong for a
@@ -175,12 +197,18 @@ reason, not merely unfashionable.
 
 Most do not — the suite covers the parser, the writers, the captcha classifier
 and the CLI contract against inline fixtures. If yours genuinely needs
-etsy.com, say in the PR what you ran, against which storefront, from
-which exit country, and what you got — including the price coverage and
-DOM-confirmation percentages the run prints. Note that a run from a
-datacentre address will be refused outright, so "it returned nothing" from a
-VPS is not a finding. Product counts differ by category and by URL, so a bare
-"worked for me" is not reproducible.
+tokopedia.com, say in the PR what you ran, which URL and page kind, from
+which exit, and what you got — including the price and image coverage
+percentages the run prints, and the scroll trace from the sidecar. Note that
+a run from a datacentre address gets NO RESPONSE AT ALL, so "it returned
+nothing" from a VPS is not a finding. Product counts differ by category, by
+URL and by how far the scroll got, so a bare "worked for me" is not
+reproducible.
+
+**Run more than the primary engine.** "Mirror them exactly" is a design rule,
+not a verification: the first live run of the pyppeteer engine crashed on its
+FIRST fetch on a signature mismatch that four separate offline checks and 400
+green assertions had not caught.
 
 Do not add anything that submits the registration form. This project
 deliberately never does, and a captcha token proved valid by creating a real
@@ -188,8 +216,8 @@ account is not a result worth having.
 
 ## Scope
 
-This repo scrapes **public pages** on Etsy: category listings, search
-results and product pages, exactly as an anonymous visitor is served them.
+This repo scrapes **public pages** on Tokopedia: search grids, category
+listings and product pages, exactly as an anonymous visitor is served them.
 Out of scope: anything behind a login, anything that submits a form, and
 anything that defeats a protection rather than passing it the way an ordinary
 browser does.

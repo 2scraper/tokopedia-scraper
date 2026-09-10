@@ -775,6 +775,32 @@ def test_page_state():
     ok &= check("page_flow maps a failed navigation to blocked",
                 page_flow.classify(None, None, SEARCH_URL) == "blocked")
 
+    # CHROMIUM'S OWN ERROR PAGE, which is what a run actually gets when the
+    # navigation fails rather than the request being refused. A live Selenium
+    # run through an unauthenticatable proxy produced 187,799 bytes of it —
+    # Chromium's built-in error styling, `<title>www.tokopedia.com</title>`,
+    # and not one reference to the site's own assets.
+    #
+    # This is the case that vindicates the inverted detection: the page
+    # carries no vendor marker and no error text a marker list would know,
+    # and its title is the SITE'S OWN HOSTNAME, so a title check would call
+    # it a real page. Only "was this built out of Tokopedia's assets?"
+    # answers correctly.
+    chrome_error = (
+        '<html><head><title>www.tokopedia.com</title>'
+        '<style>/* Copyright 2017 The Chromium Authors */ '
+        'body { --background-color: #fff; --error-code-color: var(--google'
+        '-gray-700); }</style></head><body>'
+        '<div id="main-frame-error"><span>ERR_PROXY_CONNECTION_FAILED</span>'
+        '</div></body></html>')
+    ok &= check("Chromium's own error page is not 'served by Tokopedia'",
+                not served_by_tokopedia(chrome_error))
+    ok &= check("...and classifies as blocked despite naming the site in its "
+                "title", detect_page_state(chrome_error, None, SEARCH_URL)
+                == "blocked")
+    ok &= check("...and carries no marker a vendor list would have caught",
+                detect_bot_challenge(chrome_error) is None)
+
     # "NOT PAINTED YET" IS NOT A FAULT, and telling it apart from one is what
     # the first live search run got wrong. A search grid arrives with the
     # client-side GraphQL response, so at domcontentloaded the page is a
@@ -1228,12 +1254,23 @@ def test_diff():
     ok &= check("...it is reported separately as source_changed",
                 any(c["sku"] == "3" for c in d.get("source_changed", [])))
 
-    # price_is_from is tracked: it moves only when a real price change
-    # enters or leaves the 30-day window, so a monitor watching only `price`
-    # would miss a product whose current price held while its recent floor
-    # moved underneath it.
-    ok &= check("price_is_from is a tracked field",
-                "price_is_from" in __import__("diff_runs").TRACKED_FIELDS)
+    # `sold` and `sold_is_floor` are BOTH tracked, and the pair is the
+    # point. Without the flag a `sold` change is unreadable: a tile's figure
+    # is a floor the site rounded down (100rb+ = 100_000) while a product
+    # page's is exact (207785 for that same product), so diffing a listing
+    # run against a product run would report a jump of 107,785 that is not a
+    # single sale.
+    tracked = __import__("diff_runs").TRACKED_FIELDS
+    ok &= check("sold and sold_is_floor are both tracked",
+                "sold" in tracked and "sold_is_floor" in tracked)
+    # And the sibling repo's from-price columns are NOT tracked, because they
+    # do not exist here: a Tokopedia tile prints one price, not a range.
+    # Pinned so that adding one is a decision.
+    ok &= check("no from-price columns are tracked (this site has none)",
+                not {"price_is_from", "price_max"} & set(tracked))
+    ok &= check("...and Product does not declare them either",
+                not {"price_is_from", "price_max"}
+                & {f.name for f in fields(Product)})
     return ok
 
 
@@ -2208,6 +2245,9 @@ class _FakePlaywright:
         return False
 
 
+STATE_POLICY_NAMES = ("content", "empty", "blocked", "challenge", "unknown")
+
+
 def test_engines(skips):
     group("engines: all three must behave identically")
     ok = True
@@ -2259,6 +2299,100 @@ def test_engines(skips):
         ok &= check("%s offers exactly the listing and product modes" % name,
                     '"listing", "product"]' in src)
         ok &= check("%s has no shop mode" % name, '"shop"' not in src)
+
+    # EVERY page_flow CALL IN EVERY ENGINE, CHECKED AGAINST THE REAL
+    # SIGNATURE. This is the general form of a bug the first live run of the
+    # pyppeteer engine found: `classify(html, status, url)` took `status`
+    # positionally, and two of the three engines called it as
+    # `classify(html, url=…)` because they have no response object to read a
+    # status from. Both crashed with TypeError on their FIRST fetch — and
+    # that was invisible to import, to --help, to compileall, to the AST
+    # undefined-name walk and to 400+ green offline checks, because none of
+    # those calls a function the way a live run does.
+    #
+    # An offline suite cannot execute a fetch. It CAN bind every call's
+    # arguments to the callee's signature, which is the same check the
+    # interpreter does at the moment of the call, minus the browser.
+    import inspect as _inspect
+    for name in _ENGINE_MODULES:
+        path = os.path.join(REPO_ROOT, name + ".py")
+        if not os.path.exists(path):
+            continue
+        tree = ast.parse(open(path, encoding="utf-8").read())
+        bad = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            fn = node.func
+            if not (isinstance(fn, ast.Attribute)
+                    and isinstance(fn.value, ast.Name)
+                    and fn.value.id == "page_flow"):
+                continue
+            target = getattr(page_flow, fn.attr, None)
+            if not callable(target):
+                bad.append("%s: page_flow has no %s()" % (name, fn.attr))
+                continue
+            try:
+                sig = _inspect.signature(target)
+            except (TypeError, ValueError):
+                continue
+            # Bind PLACEHOLDERS, not values: this checks arity and keyword
+            # names, which is what drifts. `*args` in the call (none today)
+            # would make the binding unknowable, so it is skipped rather
+            # than guessed at.
+            if any(isinstance(a, ast.Starred) for a in node.args) or \
+                    any(k.arg is None for k in node.keywords):
+                continue
+            try:
+                sig.bind(*[object()] * len(node.args),
+                         **{k.arg: object() for k in node.keywords})
+            except TypeError as exc:
+                bad.append("%s:%d page_flow.%s(...) — %s"
+                           % (name, node.lineno, fn.attr, exc))
+        ok &= check("every page_flow call in %s matches its signature" % name,
+                    not bad)
+        for line in bad:
+            print("        %s" % line)
+
+    # The same check for product_parser, which the engines call as often.
+    for name in _ENGINE_MODULES:
+        path = os.path.join(REPO_ROOT, name + ".py")
+        if not os.path.exists(path):
+            continue
+        tree = ast.parse(open(path, encoding="utf-8").read())
+        imported = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == "product_parser":
+                imported.update(a.asname or a.name for a in node.names)
+        bad = []
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                    and node.func.id in imported):
+                continue
+            target = getattr(product_parser, node.func.id, None)
+            if not callable(target):
+                continue
+            if any(isinstance(a, ast.Starred) for a in node.args) or \
+                    any(k.arg is None for k in node.keywords):
+                continue
+            try:
+                _inspect.signature(target).bind(
+                    *[object()] * len(node.args),
+                    **{k.arg: object() for k in node.keywords})
+            except TypeError as exc:
+                bad.append("%s:%d %s(...) — %s"
+                           % (name, node.lineno, node.func.id, exc))
+        ok &= check("every product_parser call in %s matches its signature"
+                    % name, not bad)
+        for line in bad:
+            print("        %s" % line)
+
+    # And the two-argument call itself, pinned: `status` must stay optional,
+    # because two of the three engines have no status to pass.
+    ok &= check("page_flow.classify works with no status, as two engines "
+                "call it",
+                page_flow.classify("<html>x</html>",
+                                   url=SEARCH_URL) in STATE_POLICY_NAMES)
 
     # For "it must pass with no engine installed" to mean anything, each
     # engine has to import its driver at MODULE level — otherwise the module

@@ -1,26 +1,29 @@
 name: canary
 
-# tests.yml (deliberately) never touches etsy.com — see its own header for
-# why. That leaves a real gap: a markup change on the site itself only shows
-# up when a user hits it and files an issue, while the offline badge stays
-# green throughout. This workflow is the other half — a real run against a
-# real search URL — so a site-side break is caught here first. It runs ON
-# DEMAND rather than on a schedule, for the reason set out below.
+# tests.yml (deliberately) never touches tokopedia.com — see its own header
+# for why. That leaves a real gap: a markup change on the site itself only
+# shows up when a user hits it and files an issue, while the offline badge
+# stays green throughout. This workflow is the other half — a real run
+# against a real listing URL — so a site-side break is caught here first.
 #
 # THIS CANARY CANNOT RUN FROM A BARE RUNNER, AND THAT IS NOT PESSIMISM.
 # ------------------------------------------------------------------------
-# Etsy sits behind DataDome. Measured 2026-09-09, all on live pages:
+# Tokopedia does not refuse an address it has scored. It IGNORES it.
+# Measured 2026-09-10 from a residential address:
 #
-#   plain curl from a hosting ASN               HTTP 403, t=bv
-#   headless Chromium from a hosting ASN        HTTP 403, t=bv
-#   real Chrome from a hosting ASN              HTTP 403, t=bv
-#   headless Chromium via a RESIDENTIAL exit    HTTP 403, t=bv
-#   Scraping Browser API, fresh profile         HTTP 200, 64 listings
+#   curl, HTTP/2                                000, stream reset
+#   curl, forced HTTP/1.1                       000, timeout, 0 bytes
+#   curl over port 80                           000, timeout, 0 bytes
+#   headless Chromium via Playwright            net::ERR_HTTP2_PROTOCOL_ERROR
+#   Scraping Browser API, country-id            HTTP 200, 95 products
+#   Scraping Browser API, country-us            HTTP 200, 95 products
 #
-# GitHub Actions runners are datacentre addresses, and the fourth line is the
-# important one: a residential proxy alone was NOT enough for an automated
-# browser here. So this canary gates on TOKOPEDIA_CDP_ENDPOINT — the Scraping
-# Browser API — rather than on a proxy secret like its sibling repos do.
+# The last two lines matter twice over: a residential exit is what clears
+# this, and its COUNTRY does not matter — the two runs returned identical
+# markup and zero price differences across the 68 products both saw. What
+# the site scores is the address. A GitHub Actions runner is a datacentre
+# address, so this canary gates on TOKOPEDIA_CDP_ENDPOINT — the Scraping
+# Browser API — and a proxy secret would not be enough even if one were set.
 #
 # The live steps are SKIPPED, not failed, when the secret is absent. The job
 # goes green with a notice saying why. A check that is always red teaches
@@ -31,7 +34,8 @@ name: canary
 #
 # Use a `pid` reserved for CI. A profile allows ONE live connection, so a
 # canary sharing a pid with a person's run gets `profile_locked` (exit 5) and
-# reports a failure that has nothing to do with the site.
+# reports a failure that has nothing to do with the site. This was measured:
+# two runs launched back to back against one pid, the second exited 5.
 #
 # The secret is passed through the ENVIRONMENT, which env_config.py reads for
 # exactly this variable, rather than through a --cdp-endpoint flag. Two
@@ -40,21 +44,20 @@ name: canary
 # its own CI; and an unset secret arrives as an empty string, which the
 # loader already treats as "not configured", so there is no commented-out
 # line for someone to forget to uncomment.
-# ON DEMAND, NOT ON A SCHEDULE — and that is forced by the credential rather
-# than chosen.
 #
-# A Scraping Browser endpoint on this account does not survive a day. A daily
-# cron against a credential with that lifetime produces one of two useless
+# ON DEMAND, NOT ON A SCHEDULE — forced by the credential rather than chosen.
+#
+# A Scraping Browser endpoint on this account does not survive a day: every
+# credential inherited from the sibling repos in this family was already
+# returning 401 `deny_no_user` when this repo was written. A daily cron
+# against a credential with that lifetime produces one of two useless
 # outcomes: a red badge every day (if a dead endpoint fails the job), or a
 # green badge every day that has tested nothing (if it does not). The second
 # is the more dangerous, because green reads as "the parser still works".
 #
 # So the schedule is off. Dispatch it by hand, with a fresh secret, when the
 # answer matters — before a release, or when someone reports the parser
-# missing a column. That is honest about what the check covers: the offline
-# suite runs on every push and pins the parser against real captures; this
-# workflow is the only thing that can catch ETSY changing its markup, and it
-# runs when someone asks it to.
+# missing a column.
 #
 # Put the schedule back the day a long-lived credential exists:
 #     schedule:
@@ -76,10 +79,10 @@ jobs:
         if: env.HAVE_CDP != 'true'
         run: |
           echo "::notice::Skipping the live run: no TOKOPEDIA_CDP_ENDPOINT secret is set."
-          echo "Etsy's DataDome refuses datacentre addresses, and a GitHub runner"
-          echo "is one — a residential proxy alone was measured as not enough for"
-          echo "an automated browser either. A run from here would be red every"
-          echo "day whatever the state of the code. Set a Scraping Browser API"
+          echo "Tokopedia answers an address it has scored with NOTHING — no status"
+          echo "code, no interstitial, no error page — and a GitHub runner is a"
+          echo "datacentre address. A run from here would be red every time"
+          echo "whatever the state of the code. Set a Scraping Browser API"
           echo "endpoint (with a pid reserved for CI) to turn this canary on:"
           echo
           echo "    gh secret set TOKOPEDIA_CDP_ENDPOINT --repo 2scraper/tokopedia-scraper"
@@ -101,23 +104,29 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt -r requirements-playwright.txt
 
-      - name: Scrape a real, known-good search listing
+      - name: Scrape a real, known-good category listing
         id: run
         if: env.HAVE_CDP == 'true'
-        # A SEARCH url, not a category: search is the page kind most likely to
-        # be scraped in bulk, it is the one Etsy publishes its own page count
-        # for, and it is the one whose structured-data coverage is lowest — so
-        # it exercises the DOM-primary path this repo is built around.
+        # A CATEGORY url, not a search — and on this site that is forced
+        # rather than preferred.
+        #
+        # A search listing has NO per-page addresses. It is one infinitely
+        # scrolling page, and `?page=2` on a search URL does not advance it,
+        # it EMPTIES the result set ("Oops, produk nggak ditemukan"). So a
+        # search canary could never exercise pagination, which is the thing
+        # this workflow most needs to watch. A category listing paginates
+        # with ?page=N, verified against a real page 2.
         #
         # --pages 3, not 1: with one page pagination is never exercised, so a
-        # broken ?page= convention would stay invisible here, which is
-        # precisely the silent decay this workflow exists to catch. Etsy
-        # publishes no rel=next at all, so the URL convention and the run's
-        # own "this page added nothing new" terminator are all there is.
+        # broken ?page= convention would stay invisible here — precisely the
+        # silent decay this workflow exists to catch. The site publishes no
+        # rel=next and no numbered anchors at all, so the URL convention and
+        # the run's own "this page added nothing new" terminator are all
+        # there is.
         #
-        # --retries 4: a Scraping Browser profile was measured refusing the
-        # first two requests of a session and serving the third. The engine's
-        # own block-retry budget covers that; this leaves headroom.
+        # --retries 4: the remote target was measured closing mid-scroll on
+        # three of six captures and succeeding on the next attempt. The
+        # engine's own block-retry budget covers that; this leaves headroom.
         #
         # set +e: GitHub Actions runs `run:` steps as `bash -e`, so without
         # this a non-zero scraper exit aborts the script on THAT line and the
@@ -129,7 +138,7 @@ jobs:
         run: |
           set +e
           python3 playwright_scraper.py \
-            --url "https://www.etsy.com/search?q=handmade+mug" \
+            --url "https://www.tokopedia.com/p/makanan-minuman/minuman/kopi-bubuk" \
             --pages 3 --retries 4 --out canary_run --dump-html canary_run.html
           echo "exit_code=$?" >> "$GITHUB_OUTPUT"
 
@@ -139,19 +148,17 @@ jobs:
         # ACCESS CONDITIONS ARE NOT DEFECTS, and on this site that
         # distinction decides whether the badge means anything.
         #
-        # An earlier version failed the job on ANY non-zero exit. That makes
-        # the canary red for two things that are nobody's bug:
+        # Failing the job on ANY non-zero exit makes the canary red for two
+        # things that are nobody's bug:
         #
         #   * the SECRET EXPIRED. A Scraping Browser credential is not
-        #     forever; when it stops authenticating the run exits 5, and a
-        #     daily cron then paints the badge red every day until someone
-        #     refreshes it. A check that is always red teaches everyone to
-        #     ignore checks, which is worse than having no check.
-        #   * ACCESS IS INTERMITTENT PER PROFILE. Measured 2026-09-09/10 on
-        #     one account: a fresh profile served three full pages in the
-        #     morning, and that evening two fresh profiles were refused with
-        #     t=bv through all their retries while a third served a shop
-        #     front in full, twice. Same code, same zone, same URLs.
+        #     forever — every one inherited from the sibling repos was
+        #     already dead when this repo was written. When it stops
+        #     authenticating the run exits 5.
+        #   * ACCESS IS INTERMITTENT PER PROFILE, and a profile allows one
+        #     live connection. A canary that collides with a person's run
+        #     exits 5 with `profile_locked`, which says nothing about the
+        #     site or the code.
         #
         # So: 3 (blocked), 5 (remote API error) and 6 (partial) are reported
         # as WARNINGS and do not fail the job. What stays red is a run that
@@ -159,9 +166,9 @@ jobs:
         #
         #   1  crashed
         #   2  the workflow's own arguments are wrong
-        #   4  served a page and parsed ZERO rows from a search that returns
-        #      tens of thousands — the tile anchor moved, which is exactly
-        #      what this canary exists to catch
+        #   4  served a page and parsed ZERO rows from a category listing
+        #      that holds 60 per page — the tile anchor moved, which is
+        #      exactly what this canary exists to catch
         #
         # A warning must not read as a pass, either. Each one writes to the
         # step summary as well, so the run page says in words that the canary
@@ -172,12 +179,12 @@ jobs:
           tested=true
           case "$code" in
             0)
-              echo "OK — listings parsed from a live run." ;;
+              echo "OK — products parsed from a live run." ;;
             3)
               tested=false
-              echo "::warning::Blocked before parsing (exit 3) — an ACCESS condition, not a code defect, so this run is not failed. Read the log for the DataDome 't' value: t=bv means the profile or its exit is banned and no captcha solve can help; t=fe means a solvable challenge appeared and no key was configured. Try a different --cdp-endpoint pid."
+              echo "::warning::Blocked before parsing (exit 3) — an ACCESS condition, not a code defect, so this run is not failed. On this site a block means the site sent NOTHING: there is no challenge to solve and no key would help. Check the debug dump's byte count in the artefacts — 0 bytes means the request never got a response. Try a different --cdp-endpoint pid."
               echo "### Canary did NOT test anything (exit 3, blocked)" >> "$GITHUB_STEP_SUMMARY"
-              echo "Etsy refused the request before any markup was parsed. The parser was not exercised. This is access, not a regression — but it also means the site-side check did not happen." >> "$GITHUB_STEP_SUMMARY" ;;
+              echo "Tokopedia did not serve the request, so the parser was not exercised. This is access, not a regression — but it also means the site-side check did not happen." >> "$GITHUB_STEP_SUMMARY" ;;
             5)
               tested=false
               echo "::warning::Remote API error (exit 5) — the Scraping Browser endpoint refused the connection, so nothing was tested and this run is not failed. If the log says 'profile_locked', another run still holds this pid: give CI its own. Otherwise the TOKOPEDIA_CDP_ENDPOINT secret has most likely expired and needs refreshing."
@@ -185,11 +192,11 @@ jobs:
               echo "The most likely cause is an expired \`TOKOPEDIA_CDP_ENDPOINT\` secret. Refresh it, or remove it to go back to the explicit SKIP path." >> "$GITHUB_STEP_SUMMARY" ;;
             6)
               tested=false
-              echo "::warning::Partial run (exit 6) — some pages were gathered and the run then stopped early, usually a mid-run block. canary_run.meta.json names which pages failed. Not failed, because on this site that is an access condition; if it repeats on every run, suspect pagination instead."
+              echo "::warning::Partial run (exit 6) — some pages were gathered and the run then stopped early, usually the remote target closing mid-scroll. canary_run.meta.json names which pages failed. Not failed, because on this site that is an access condition; if it repeats on every run, suspect pagination instead."
               echo "### Canary tested only PART of the run (exit 6)" >> "$GITHUB_STEP_SUMMARY"
               echo "See \`pages_failed\` in the sidecar artefact." >> "$GITHUB_STEP_SUMMARY" ;;
             4)
-              echo "::error::Ran fine but parsed 0 rows (exit 4) on a search that returns tens of thousands of listings. The tile anchor (data-listing-id) has probably moved — this is the regression this canary exists to catch. The HTML dump in the artefacts tells you."
+              echo "::error::Ran fine but parsed 0 rows (exit 4) on a category listing that holds 60 products per page. Either the grid container (data-ssr=productsCategoryL2/L3SSR) or the tile anchor (a[data-testid=lnkProductContainer]) has moved — this is the regression this canary exists to catch. The HTML dump in the artefacts tells you which."
               exit 1 ;;
             2)
               echo "::error::Bad usage (exit 2) — the workflow's own arguments are wrong, not the site."
@@ -206,29 +213,23 @@ jobs:
         # the wrong reason.
         if: env.HAVE_CDP == 'true' && steps.verdict.outputs.tested == 'true'
         # Exit 0 only means "some rows were written". It says nothing about
-        # whether the page actually rendered: a snapshot taken too early still
-        # writes rows, just with fields empty. Every floor below is set from a
-        # measured figure and deliberately under it, so this fails on a
-        # collapse rather than on normal variation.
+        # whether the page actually rendered: a snapshot taken too early
+        # still writes rows, just with fields empty. Every floor below is set
+        # from a measured figure and deliberately under it, so this fails on
+        # a collapse rather than on normal variation.
         run: |
           python3 - <<'EOF'
           import json, sys
           from pathlib import Path
 
           PAGES_REQUESTED = 3
-          # Measured 2026-09-09 over the Scraping Browser API: 3 pages of this
-          # search gave 184 rows (62 + 61 + 64, deduped), 0 duplicate skus.
-          # The floor is under two pages' worth, so a short page cannot trip it.
+          # Measured 2026-09-10 over the Scraping Browser API: two pages of
+          # this listing gave 119 rows after dedupe (60 + 60, one duplicate).
+          # Three pages should give ~179. The floor is under two pages'
+          # worth, so a short last page cannot trip it.
           MIN_ROWS = 110
-          # 184/184 carried a price: every tile prints one.
+          # 119/119 carried a price: every tile prints one.
           MIN_PRICED_SHARE = 0.95
-          # Rows whose rendered price was CONFIRMED against Etsy's own
-          # structured data. THIS FLOOR IS LOW ON PURPOSE. Etsy publishes
-          # JSON-LD for 8 of the 64 listings a search page renders, so 11%
-          # (21/184 measured) is the ACHIEVABLE figure here, not a defect — a
-          # category page reaches 88% on the same code. A 90% floor copied
-          # from a sibling repo would fail this canary every single day.
-          MIN_CONFIRMED_SHARE = 0.04
 
           rows = json.loads(Path("canary_run.json").read_text())
           meta = json.loads(Path("canary_run.meta.json").read_text())
@@ -241,7 +242,9 @@ jobs:
           skus = [r.get("sku") for r in rows]
           if len(set(skus)) != len(skus):
               fail.append(f"{len(skus) - len(set(skus))} duplicate sku(s) — the "
-                          f"dedupe or the pagination is repeating a page")
+                          f"dedupe is not running, since this listing WAS "
+                          f"measured repeating a few carousel products across "
+                          f"pages and the writer is meant to drop them")
 
           priced = sum(1 for r in rows if r.get("price") is not None)
           if rows and priced / len(rows) < MIN_PRICED_SHARE:
@@ -249,60 +252,82 @@ jobs:
                           f"(floor {MIN_PRICED_SHARE:.0%}) — every tile prints "
                           f"one, so this means the price node moved")
 
-          confirmed = sum(1 for r in rows if r.get("price_source") == "jsonld+dom")
-          if rows and confirmed / len(rows) < MIN_CONFIRMED_SHARE:
-              fail.append(f"only {confirmed}/{len(rows)} rows were confirmed "
-                          f"against structured data (floor "
-                          f"{MIN_CONFIRMED_SHARE:.0%}) — the join between tiles "
-                          f"and JSON-LD has broken, which empties in_stock and "
-                          f"part of brand without touching the row count")
+          # THERE IS NO STRUCTURED-PRICE CONFIRMATION SHARE TO CHECK, and
+          # that absence is measured rather than an omission: a Tokopedia
+          # listing page carries no structured data at all — 0
+          # application/ld+json, 0 __NEXT_DATA__, 0 Apollo state across six
+          # captures. So `price_source` is "dom" on every listing row, and a
+          # confirmation floor copied from a sibling repo would fail this
+          # canary every single run.
+          sources = {r.get("price_source") for r in rows}
+          if sources - {"dom"}:
+              fail.append(f"listing rows carry price_source {sorted(sources)} — "
+                          f"only 'dom' is possible on a listing page here, so "
+                          f"something is claiming a source it cannot have")
 
           # Fields that were fully populated on the measured run. Any of them
           # collapsing means an anchor moved.
           for field, floor in (("title", 0.98), ("sku", 1.0), ("url", 1.0),
                                ("brand", 0.95), ("currency", 0.95),
-                               ("image_url", 0.95), ("category", 1.0),
-                               ("shop_id", 0.95), ("shop_rating", 0.80)):
+                               ("category", 1.0), ("shop_slug", 1.0),
+                               ("page", 1.0), ("position", 1.0)):
               got = sum(1 for r in rows if r.get(field) not in (None, ""))
               if rows and got / len(rows) < floor:
                   fail.append(f"{field} present on only {got}/{len(rows)} rows "
                               f"(floor {floor:.0%})")
 
-          # THE AD COLUMN. Sponsored listings are mixed into organic results —
-          # 45 of 184 on the measured run — and Etsy labels them in the page's
-          # own language, so this column rests on the tile link's `ls`
-          # parameter. If that parameter ever goes away, is_ad quietly becomes
-          # None on every row and paid placements enter the data as organic
-          # results with nothing to say so. Both directions are required:
-          # all-ads and no-ads are equally wrong.
-          flagged = sum(1 for r in rows if r.get("is_ad") is True)
-          organic = sum(1 for r in rows if r.get("is_ad") is False)
-          unknown = sum(1 for r in rows if r.get("is_ad") is None)
-          if rows and unknown / len(rows) > 0.1:
-              fail.append(f"is_ad is unknown on {unknown}/{len(rows)} rows — the "
-                          f"tile links have probably stopped carrying `ls`")
-          if rows and (flagged == 0 or organic == 0):
-              fail.append(f"is_ad says {flagged} sponsored and {organic} organic "
-                          f"— a search page has both, so one of those being "
-                          f"zero means the signal is being read wrong")
+          # `image_url` IS EXPECTED TO BE SPARSE, and a floor near 100% would
+          # fail every healthy run. Tokopedia lazy-loads tile images, so a
+          # tile that never scrolled into view carries a placeholder and this
+          # parser reports null rather than the placeholder. Measured 39%
+          # (46/119) across two pages, so the floor is 15% — low enough for
+          # normal variation, high enough to catch the column emptying
+          # entirely, which is what a changed CDN path would do.
+          #
+          # And the other direction: nothing may be a placeholder. That is
+          # the failure mode this column was built to avoid — 100% populated
+          # and half wrong.
+          imaged = [r.get("image_url") for r in rows if r.get("image_url")]
+          if rows and len(imaged) / len(rows) < 0.15:
+              fail.append(f"image_url present on only {len(imaged)}/{len(rows)} "
+                          f"rows — expected roughly 40% from lazy loading, so "
+                          f"this low means the CDN path or the ~tplv- marker "
+                          f"has changed")
+          placeholders = [u for u in imaged
+                          if "~tplv-" not in u or "/obj/" in u or "/img/" in u
+                          or u.lower().endswith(".svg") or u.startswith("data:")]
+          if placeholders:
+              fail.append(f"{len(placeholders)} image_url(s) are placeholders or "
+                          f"icons, not product images: {placeholders[:2]} — the "
+                          f"positive recognition has broken and the column is "
+                          f"now populated with the wrong thing")
 
-          # `rating` is the LISTING's, and it is null on a listing run BY
-          # DESIGN: Etsy publishes no per-listing rating there (0 of 105
-          # JSON-LD nodes across three page kinds). The stars on a tile are the
-          # SHOP's and belong in shop_rating. If `rating` ever starts filling
-          # up here, something is copying the shop's figure into the listing's
-          # column — the exact confusion this schema separates.
-          rated = sum(1 for r in rows if r.get("rating") is not None)
-          if rated:
-              fail.append(f"{rated}/{len(rows)} listing rows have a per-listing "
-                          f"`rating` — Etsy publishes none on a listing page, so "
-                          f"the shop's rating is probably being written into the "
-                          f"listing's column")
+          # A CATEGORY tile prints no rating, no sold count and no was-price
+          # — 0 of 60 on every capture. If any of them starts filling up
+          # here, something is reading a neighbouring page kind's markup, or
+          # a carousel's, into these rows.
+          for field in ("rating", "sold", "original_price", "discount_pct"):
+              got = sum(1 for r in rows if r.get(field) is not None)
+              if got:
+                  fail.append(f"{got}/{len(rows)} category rows have `{field}` "
+                              f"— a category tile prints none, so this is "
+                              f"probably another page kind's markup being read")
 
-          # THE INVARIANT. An original_price at or below the price means the
-          # sale price and the was-price are being read out of the wrong
-          # nodes, and it produces negative discounts on products that are not
-          # discounted. One line, and it catches that forever.
+          # Detail-only columns must stay null on a listing run, or a listing
+          # row is claiming facts only a product page states.
+          for field in ("product_id", "shop_id", "condition", "weight_grams",
+                        "stock_max", "listed_at", "category_url",
+                        "review_count", "in_stock"):
+              got = sum(1 for r in rows if r.get(field) is not None)
+              if got:
+                  fail.append(f"{got}/{len(rows)} listing rows have `{field}`, "
+                              f"which only --mode product can know")
+
+          # THE INVARIANT, one line, and it catches a whole class forever. An
+          # original_price at or below the price means the sale price and the
+          # was-price are being read out of the wrong nodes — which is what a
+          # second KIND of struck-through price would produce, the way an EU
+          # Omnibus 30-day low did in a sibling repo.
           crossed = [r["sku"] for r in rows
                      if r.get("original_price") and r.get("price")
                      and r["original_price"] <= r["price"]]
@@ -310,37 +335,39 @@ jobs:
               fail.append(f"{len(crossed)} row(s) have an original_price at or "
                           f"below their price: {crossed[:3]} — the sale price "
                           f"and the strikethrough are being confused")
-          negative = [r["sku"] for r in rows
-                      if r.get("discount_pct") is not None and r["discount_pct"] <= 0]
-          if negative:
-              fail.append(f"{len(negative)} row(s) have a discount of zero or "
-                          f"less: {negative[:3]}")
+          bad_discount = [r["sku"] for r in rows
+                          if r.get("discount_pct") is not None
+                          and not (0 < r["discount_pct"] < 100)]
+          if bad_discount:
+              fail.append(f"{len(bad_discount)} row(s) have a discount outside "
+                          f"(0, 100): {bad_discount[:3]}")
 
-          # A shop rating is out of five.
-          bad_rating = [r["sku"] for r in rows
-                        if r.get("shop_rating") is not None
-                        and not (0 < r["shop_rating"] <= 5)]
-          if bad_rating:
-              fail.append(f"{len(bad_rating)} row(s) have a shop_rating outside "
-                          f"(0, 5]: {bad_rating[:3]}")
+          # `sku` is the /{shop}/{slug} path, NOT the 19-digit URL tail —
+          # which is not the product id and is absent on about a third of
+          # rows. If this shape changes, every downstream join breaks
+          # silently.
+          bad_sku = [r.get("sku") for r in rows
+                     if not (r.get("sku") or "").startswith("/")
+                     or (r.get("sku") or "").count("/") != 2]
+          if bad_sku:
+              fail.append(f"{len(bad_sku)} sku(s) are not a /{{shop}}/{{slug}} "
+                          f"path: {bad_sku[:3]}")
 
-          # One storefront per run, or the prices are not comparable. Etsy is
-          # one host, so `source` cannot catch a geo-redirect the way it does
-          # in the sibling repos — the CURRENCY can, and a run that straddles
-          # two markets is a run whose numbers cannot be diffed.
+          # One currency per run, always IDR. The site has one storefront —
+          # measured identical from two exit countries — so more than one
+          # currency here means something is inventing them.
           currencies = {r.get("currency") for r in rows if r.get("currency")}
-          if len(currencies) > 1:
-              fail.append(f"rows carry more than one currency ({currencies}) — "
-                          f"the run was redirected mid-way and the prices are "
-                          f"not comparable")
+          if currencies - {"IDR"}:
+              fail.append(f"rows carry a currency other than IDR "
+                          f"({sorted(currencies)}) — this site quotes one")
 
           # The point of running more than one page.
           if meta.get("pages_completed", 0) < PAGES_REQUESTED:
               fail.append(f"pagination stopped after {meta.get('pages_completed')} "
                           f"of {PAGES_REQUESTED} pages (stop_reason="
                           f"{meta.get('stop_reason')!r}) — the ?page= convention "
-                          f"has probably broken, and Etsy publishes no rel=next "
-                          f"to fall back on")
+                          f"has probably broken, and this site publishes no "
+                          f"rel=next to fall back on")
           pages_seen = {r.get("page") for r in rows}
           if len(pages_seen) < PAGES_REQUESTED:
               fail.append(f"rows came from only {sorted(pages_seen)} — a page was "
@@ -350,10 +377,27 @@ jobs:
           if meta.get("mode") != "listing":
               fail.append(f"run mode is {meta.get('mode')!r}, not 'listing'")
 
+          # THE SCROLL IS THE ONLY REASON THERE ARE ROWS AT ALL on this site:
+          # the first response paints nothing. A page whose grid was still
+          # growing when the budget ran out is PARTIAL, and reporting it as
+          # complete would read as a shrinking catalogue.
+          scroll = (meta.get("scroll") or {})
+          unsettled = [p for p, s in scroll.items()
+                       if isinstance(s, dict) and not s.get("settled")]
+          if unsettled:
+              fail.append(f"page(s) {unsettled} were still loading when the "
+                          f"scroll budget ran out, so their row counts are "
+                          f"floors rather than the listing")
+          if not scroll:
+              fail.append("the sidecar records no scroll at all — the lazy-load "
+                          "loop did not run, and on this site that means the "
+                          "rows came from whatever the first batch happened to "
+                          "have painted")
+
           for line in fail:
               print(f"::error::{line}")
           print(f"[canary] {len(rows)} rows, {priced} priced, "
-                f"{confirmed} structured-confirmed, {flagged} sponsored, "
+                f"{len(imaged)} with a loaded image, "
                 f"status={meta.get('status')}, "
                 f"pages={meta.get('pages_completed')}/{PAGES_REQUESTED}, "
                 f"currency={sorted(currencies)}")

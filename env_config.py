@@ -125,7 +125,7 @@ def load_env(path=None, override=False):
 def unknown_keys(path=None):
     """Keys present in .env that nothing in this project reads.
 
-    Usually a typo — `TWO_CAPTCHA_KEY`, `ETSY_CDP` — which otherwise fails
+    Usually a typo — `TWO_CAPTCHA_KEY`, `TOKOPEDIA_CDP` — which otherwise fails
     silently as "the key just isn't being picked up".
     """
     if path is None:

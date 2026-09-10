@@ -1,289 +1,344 @@
 # Troubleshooting
 
-Ordered by how often each one is the answer. Every number here was measured
-on **2026-09-09** against `etsy.com`; where a symptom has more than one
-cause, the section says how to tell them apart rather than listing guesses.
+Symptoms in the order you are likely to meet them. Every number was measured
+on **2026-09-10** against `tokopedia.com`; where a symptom has more than one
+cause, the causes are ordered by how often they were the answer.
 
 ---
 
-## Every page comes back exit 3 (blocked)
+## Nothing comes back at all — a timeout, or exit 3 with a 0-byte dump
 
-**Read the `t` value in the log first — it says whether money can help.**
-Etsy sits behind DataDome, and its refusal is a ~1.5 KB shell carrying
-DataDome's own JS object:
+**This is the normal failure on this site, and it is not a bug.**
 
-```
-var dd={'rt':'c', ..., 't':'bv', 'host':'geo.captcha-delivery.com', ...}
-```
+Tokopedia does not refuse an address it has scored. It ignores it: the
+connection is accepted, TLS completes, the HTTP/2 stream opens, and then it
+is reset. No status code, no interstitial, no challenge, no error page.
 
-| What the log says | What it means | What fixes it |
+    curl https://www.tokopedia.com/            000, stream reset (INTERNAL_ERROR)
+    curl --http1.1 https://www.tokopedia.com/  000, timeout, 0 bytes
+    headless Chromium via Playwright           net::ERR_HTTP2_PROTOCOL_ERROR
+
+A real browser gets the same treatment as curl, so it is not a TLS or HTTP/2
+fingerprint problem — it is the address.
+
+**What fixes it: any residential exit. The country does not matter.** An
+Indonesian exit (`country-id`) and a US one (`country-us`) both returned HTTP
+200 and 95 products, with identical markup and zero price differences across
+the 68 products both runs saw.
+
+**What does NOT fix it:**
+
+- **A 2Captcha solving key.** There is no challenge on the page, because
+  there is no page. No challenge of any kind has been observed on this site.
+- **`--retries`.** That budget is for transient faults. The engines have a
+  separate block-retry budget, and on a scored address neither helps.
+- **A datacentre proxy.** A GitHub Actions runner is one, which is why the
+  canary in this repo skips rather than fails when it has no Scraping Browser
+  endpoint.
+
+**Read the byte count in the error line.** The engines write the debug dump
+even when it is empty, because "0 bytes" is itself the diagnosis and a reader
+who finds no file at all cannot tell that from a run that never got there.
+
+    Tokopedia did not serve this request — 0 bytes, with no reference to the
+    site's own asset host, saved to out_page1_debug.html.
+
+A dump with bytes in it that still reports `not-served` means something
+answered but it was not built out of Tokopedia's own assets — see the next
+section.
+
+---
+
+## `--proxy` is set and every navigation times out
+
+Known, reproducible, and not understood. The 2Captcha residential gateway
+does reach an Indonesian exit — `36.77.157.93`, Bandung, Telkom Indonesia —
+and plain `requests` fetches through it fine. But **every Chromium navigation
+through it times out, including `shopee.co.id` as a control**, so it is the
+browser-plus-proxy combination rather than anything to do with Tokopedia.
+
+Until it is understood, use `--cdp-endpoint`. If you have a proxy Tokopedia
+accepts from a browser, `--proxy` is wired and its credentials never reach
+the browser's command line.
+
+---
+
+## `500 Internal Server Error` on connecting, exit 5
+
+A Scraping Browser profile allows **one live connection**. Two runs against
+the same `pid` give the second a 500, which the engine reports as exit 5
+(remote API error) with that explanation.
+
+Measured: two runs launched back to back against one pid — the second exited
+5 even though the first had already printed its results, because the profile
+had not been released yet. Leave ~60 seconds between runs on one pid, or give
+each concurrent run its own.
+
+`401 deny_no_user` is a different thing: the endpoint's login is no longer
+recognised, which usually means the credential has expired. Every endpoint
+inherited from this family's sibling repos was already returning it when this
+repo was written.
+
+---
+
+## Exit 4 and zero rows — is it broken, or is the page empty?
+
+There are **three** ways to get a page with no products on it, and none of
+them is a fault.
+
+**A `/p/<slug>` URL with one path segment is a discovery hub.** Banners,
+brand strips and recommendation carousels, with no product grid on it. It
+does carry ~39 product links from those carousels, so a scraper anchored on
+the URL pattern alone would return 39 rows of filler and report success; this
+one is scoped to the grid and returns zero. The engines warn about it by
+name:
+
+    /p/makanan-minuman is a /p/<slug> DISCOVERY HUB, not a listing…
+
+The real listings are one or two levels down —
+`/p/makanan-minuman/minuman/kopi-bubuk`. A product page's own breadcrumb
+names its category's listing URL, and a `--mode product` run records it in
+`category_url`.
+
+**A search whose query matches nothing** answers 200 with the site's filter
+rail, its footer and `Oops, produk nggak ditemukan` where the grid would be.
+
+**One page past the end of a category listing** does the same.
+
+All three are exit 4. If you expected products, check the URL kind first —
+`listing_kind()` in `product_parser.py` is what the engines use, and a hub is
+by far the most common mistake.
+
+---
+
+## The run says "shell … has not painted" and then works
+
+That is the expected path on a search URL, not a warning to act on:
+
+    Page 1 is a shell Tokopedia served but has not painted (610712 bytes,
+    no grid) — waiting up to 45s for the grid rather than spending a retry.
+
+A **category** listing server-renders its grid container, so it is content
+from the first response. A **search** grid arrives with a client-side GraphQL
+response, so at `domcontentloaded` the page is a 600 KB shell with
+`divSRPLazyProductWrapper` placeholders and nothing else. Classified naively
+that is "unknown", "unknown" retries, and the first live search run of this
+engine fetched the page twice, scrolled not at all and reported 0 rows with
+exit 4. It now waits instead.
+
+---
+
+## `image_url` is null on most rows
+
+**Expected, and the alternative is worse.** Tokopedia lazy-loads tile images:
+a tile that has not scrolled into view carries a placeholder — an SVG under
+`/obj/tokopedia-web-sg/zeus_v2/` on a search page (55 of 95 tiles), a `data:`
+URI on a category page (30 of 60). Reading `src` blindly gives a column that
+is 100% populated and half wrong.
+
+So a product image is recognised positively — the tile's own product `<img>`,
+on the site's image CDN, carrying the `~tplv-` transform marker every real
+product image has and no icon does — and everything else is null. Measured
+36-43% populated on live runs. Scroll further and more rows fill in.
+
+A search tile carries three to seven `<img>` elements (the product, a rating
+star, a glyph, usually a shop badge, sometimes a ribbon and a video
+thumbnail), so a naive "first CDN-hosted image" read returns the **shop
+badge** on most rows.
+
+---
+
+## `slug_id` is null on about a third of rows, and `product_id` on all of them
+
+Both are correct on a listing run.
+
+Most product URLs end in a 19-digit tail, and **4 of 40 do not** — two carry
+a short hex suffix instead, all four ordinary organic products with identical
+tile markup. `slug_id` carries that tail where it exists.
+
+**The tail is not the product id.** The id Tokopedia's own app deep links use
+is `103490518624` for a product whose URL tail is `1731177319241910164`, and
+only a detail page states it. `product_id` is populated by `--mode product`
+and null on a listing run, along with `shop_id`, `condition`,
+`weight_grams`, `stock_max`, `listed_at`, `category_url`, `review_count` and
+`in_stock`.
+
+`sku` is the URL **path** — always present, stable, what the site's own
+canonical uses, and what a listing row and a detail row join on.
+
+---
+
+## `rating`, `sold`, `original_price` and `discount_pct` are null on every row
+
+Check which page kind the run used. A **category** tile prints none of them —
+0 of 60 on every capture — while a **search** tile prints all four. That is a
+property of the page kind, not a parsing failure.
+
+The columns stay because a search grid and `--mode product` do populate them.
+The sidecar's `mode` says which run you are reading, and `diff_runs.py`
+refuses to compare two runs of different modes.
+
+---
+
+## `sold` disagrees between two runs of the same product
+
+Check `sold_is_floor`.
+
+A tile prints `100rb+ terjual` — *rb* is *ribu*, a thousand, and the `+`
+means the site rounded down. The same product's own page states `countSold`
+207785. So a listing row's `sold` is a **lower bound** and a product row's is
+exact, and the two are not comparable. That is what the flag is for, and why
+`diff_runs.py` will not diff a listing run against a product run.
+
+---
+
+## `price_source`
+
+| Value | Means | When it is a problem |
 |---|---|---|
-| `t=bv` | the address or the browser is banned. 2Captcha's own docs: the cookie a solve returns is **not accepted** | a different exit, or a different `--cdp-endpoint` pid. **Not** a captcha key |
-| `t=fe` | a real, solvable slider | `--twocaptcha-key`, with a proxy (the task requires one) |
-| `rt='i'`, no `t` | a device check still in progress | nothing — the engines wait it out, and it becomes one of the two above or clears itself |
+| `dom` | The rendered tile. **The only possible value on a listing page** — there is no structured data on one to confirm against. | Never on a listing run. On a product run it means the Apollo cache was missing. |
+| `meta+apollo` | `--mode product`: the price from the page's own `product:price:amount` meta, everything else from its `window.__cache` Apollo blob. | Nothing. |
+| `meta` | `--mode product` where the Apollo cache was absent. | `product_id`, `shop_id`, the exact `sold` and the review count will all be null. |
 
-**A local browser on your own address will almost certainly not work.**
-Measured 2026-09-09:
-
-```
-curl + browser UA, hosting ASN            403  t=bv
-headless Chromium, hosting ASN            403  t=bv
-real Chrome (channel="chrome"), hosting    403  t=bv
-headless Chromium via residential US       403  t=bv
-curl via that SAME residential US exit     403  rt=i   (an interstitial, not a ban)
-Scraping Browser API, fresh profile        200  64 listings
-```
-
-The fourth and fifth lines are the point: from one address, a plain HTTP
-client got an interstitial and an automated browser got a hard ban. DataDome
-scores the network first and the browser second, and an automated browser
-fails the second test. **So a residential proxy alone is usually not enough
-here** — which is the opposite of the sibling repos in this family.
-
-**The fix that works is `--cdp-endpoint`** pointing at a 2Captcha Scraping
-Browser session. On the measured runs it needed no captcha solve at all.
-
-**If a fresh profile still refuses you, retry before you rotate.** A `pid`
-warms up: one was measured refusing the first two requests of a session and
-serving the third and everything after it in full, 1.3 MB and 64 listings.
-The engines carry three block-retries for exactly this, separate from
-`--retries`. If three do not clear it, that `pid` is burnt — use another, and
-reuse a handful rather than minting one per run (they are capped per
-account).
-
-**How to confirm it is this and not something else.** Run with
-`--dump-html page.html` and look at what arrived:
-
-| What the dump contains | What it is |
-|---|---|
-| ~1.5 KB, `captcha-delivery.com`, `'t':'bv'` | a hard block; change exit or pid |
-| ~1.5 KB, `captcha-delivery.com`, `/interstitial/` | a check in progress; the run should have waited — if it did not, file a bug |
-| A real page with listings in it | not a block at all; see the empty-column section below |
-| A real page with no listings | a page that HAS none — exit 4, not 3 |
-
-## Exit 4 (zero products) on a URL that plainly has products in a browser
-
-Two causes, and they are easy to tell apart.
-
-**A page that genuinely has no listings.** A taxonomy hub, a search whose
-filters exclude everything, or one page past the end of a listing. All three
-answer HTTP 200 with a real page and nothing on it, and the run reports exit
-4 because that is the honest answer — the request was served exactly as
-asked. Open the URL yourself: if you see no grid, exit 4 is correct.
-
-**The tile anchor moved.** If the URL plainly shows a grid in your browser
-and the run still reports zero, the primary anchor
-(`div[data-listing-id]`) is no longer matching. Confirm with
-`--dump-html page.html` and grep it:
-
-```bash
-grep -c 'data-listing-id' page.html      # 129 on a healthy search page
-grep -c 'application/ld+json' page.html  # 1 on a healthy search page
-```
-
-If the first number is 0 and the second is 1, the DOM path broke and the
-JSON-LD fallback is carrying the run — which on a search page means about 8
-rows instead of 64. That is a site change worth an issue, with the dump
-attached.
+**There is no `jsonld` value, and that is measured.** A Tokopedia listing
+page carries zero `application/ld+json`, zero `__NEXT_DATA__`, zero
+React-flight payload and zero Apollo state, across six captures. Any
+confirmation threshold copied from a sibling repo would fail every run.
 
 ---
 
-## The row count is right but a column is empty
+## A discount of 90%+ — is the parser confusing the two prices?
 
-Check `price_source` first. It is in every row for exactly this reason.
+Almost certainly not. One captured tile prices a 1 kg coffee at Rp3.653
+against a Rp117.000 was-price, and the site's own badge says 97%. Sellers set
+both numbers.
 
-| Value | Meaning | If this is unexpected |
-|---|---|---|
-| `dom` | The rendered tile only. **The NORMAL case on this site** — Etsy publishes JSON-LD for 8 of the 64 listings a search page renders, so most rows have nothing to be confirmed against. | Nothing. 163 of 184 rows on a live search run. |
-| `jsonld+dom` | The tile and Etsy's own structured data agreed. The trustworthy read. | Nothing. ~12% of a search page, ~88% of a category page. |
-| `jsonld` | Structured data only; no price was found in the tile. | The tile's price node has moved. `original_price` comes from the tile ONLY, so it will be empty. |
+Two things guard against the real confusion:
 
-Every run prints DOM-confirmation coverage per page and warns below 90%, so a
-tile-markup change shows up in the log rather than as a quietly emptier
-output.
-
-**A LOW confirmation share is normal on a search page and NOT a fault.**
-Etsy publishes JSON-LD for only a fraction of what it renders, and the
-fraction depends on the page kind:
-
-```
-search page     8 of 64 listings   ->  ~12% is HEALTHY
-category page  61 of 65 listings   ->  ~88%
-shop front     36 of 40 listings   ->  ~92%
-```
-
-The engines log the share with the page kind beside it and warn only below a
-floor set for THAT kind. A search run reporting 12% is working exactly as
-designed; a *category* run reporting 12% means the join between tiles and
-structured data has broken, which empties `in_stock` and part of `brand`
-while the row count and the prices stay perfectly healthy.
-
-**Columns that are empty on purpose**, so you do not go looking:
-
-- **`rating` and `review_count` are null on EVERY listing row.** Etsy
-  publishes no per-listing rating on a listing page — 0 of 105 JSON-LD
-  product nodes across a search page, a category page and a shop front. The
-  stars you see on a tile are the **shop's**, and they are in `shop_rating` /
-  `shop_review_count`. Use `--mode product` for a listing's own rating.
-- `description`, `images`, `material`, `gtin`, `free_shipping` and
-  `ships_from` are null on every listing row: only a detail page publishes
-  them. Use `--mode product`.
-- `gtin` is null on almost every row even in product mode. Most handmade
-  listings have no barcode.
-- `original_price` and `discount_pct` are null unless the tile shows a
-  strikethrough — 49 of 184 rows on a live run.
-- `price_max` is null unless the listing has variations AND Etsy published an
-  `AggregateOffer` for it. The tile prints only the low end.
-- `is_ad` is null on a shop front: a seller's own catalogue carries no ads,
-  and the tiles there have no `ls` parameter at all.
-
-`--dump-html PATH` writes the exact bytes the parser was given, on success as
-well as failure, which is the only way to tell a parsing bug from a snapshot
-taken too early.
+- The discount is **computed** from the two prices, never read off the badge.
+  Tokopedia only prints a badge above some threshold — two tiles carry a
+  strike at 7% and 8% off with no badge at all — so computing recovers 88
+  rows of 95 where reading recovers 86. Where both exist they agreed on all
+  86.
+- `discount_pct` is `None`, never zero or negative, when the figures are not
+  what they were taken for. A row with an `original_price` at or below its
+  `price` is what a second KIND of struck-through price would produce, and
+  both the suite and the canary assert there are none.
 
 ---
 
-## A product shows a negative or absurd discount
+## The parser used to work and now returns empty columns
 
-It should not, and if it does, that is a bug worth reporting with the sku.
+**Class names are content hashes on this site.**
+`<span class="+tnoqZhn89+NHUA43BpiJg==">` is the product title today and will
+be something else after the next deploy. Nothing in this repo anchors on one.
 
-Unlike its sibling repos, Etsy renders exactly ONE kind of struck-through
-price — the was-price — so there is no second node to confuse it with and no
-`lowest_price_30d` column here. What can still go wrong is reading the sale
-price and the strikethrough out of the wrong nodes, because **both live
-inside one container** along with the discount badge:
+This repo's own April 2026 prototype anchored on
+`data-testid="linkProductName"`, `linkProductPrice`, `linkProductShopName`
+and friends — **every one of those is gone**, zero occurrences on either page
+kind five months later. What survived is the URL pattern, three container
+`data-testid`s and the utility class `flip`.
 
-```
-"Sale-Preis 35,87 € 35,87 € 59,79 € Ursprünglicher Preis 59,79 € (40% Rabatt)"
-```
+So if a column empties, look in this order:
 
-Reading "the first price" out of that text is a coin flip. This parser reads
-the current price from the container with the strikethrough and promotion
-subtrees removed, and the was-price from the strikethrough alone — and
-`discount_pct` is computed from `price` and `original_price` only. If you see
-a discount at or below zero, the two got crossed somewhere.
+1. **The grid container.** `[data-testid="divSRPContentProducts"]` on a
+   search page, `[data-ssr="productsCategoryL2/L3SSR"]` on a category
+   listing. If this moves, the run reports 0 rows and exit 4 — loud.
+2. **The tile marker.** `[data-testid="imgLeg-c"]` on a search page (one per
+   tile), `[data-testid="divProductWrapper"]` inside
+   `a[data-testid="lnkProductContainer"]` on a category listing.
+3. **The reading ORDER inside the tile**, which is what the field reads rest
+   on: badge, title, price, was-price, rating, sold, shop, location. If
+   Tokopedia reorders a tile, `title` and the prices are what break.
+4. **`span.flip`**, which is the shop name and the shop's city, in that
+   order, exactly two per search tile.
 
----
-
-## "Blocked by turnstile" over `--cdp-endpoint`, on a page that clearly loaded
-
-Fixed here, and worth knowing if you write your own detector.
-
-The Scraping Browser API's auto-solve extension injects its own captcha
-hunters into every page it loads:
-
-```html
-<script src="chrome-extension://kjmkgkdkpedkejedfhmfcenooemhbpbo/content/captcha/turnstile/hunter.js"
-        data-ts-input="cf-turnstile-response"></script>
-```
-
-so `cf-turnstile` appears in the markup of a perfectly good category grid.
-The first live run of this scraper reported exit 3 on a 1.8 MB page holding
-the full catalogue for exactly this reason. This repo now strips
-`chrome-extension://` and `moz-extension://` scripts before looking for
-challenge markers, and never treats a marker as blocking when products have
-already rendered.
-
-If you are seeing this from another tool, that is where to look.
+`--dump-html` writes the snapshot the parser was given, on success too. A run
+can return the right row count with a field silently unpopulated, and then
+the exact bytes are the only way to tell a parsing bug from a too-early
+snapshot.
 
 ---
 
-## HTTP 500 from the Scraping Browser endpoint
+## `--concurrency 4` is refused
 
-A profile (`pid-`) allows **one live connection at a time**. A 500 usually
-means another run still holds it. Wait for that run to finish, or use a
-different `pid` in the endpoint URL.
+On a search URL, by design:
 
-This is also why `--concurrency` is refused with `--cdp-endpoint`: N workers
-would collide on one profile. Several `pid`s, one run each, is the way.
+    a Tokopedia search listing has no per-page addresses — it is one
+    infinitely scrolling page, and ?page=N on a search URL returns an EMPTY
+    result set rather than page N. Workers would each re-fetch the same
+    page. Use a category listing URL (/p/<cat>/<sub>/<subsub>), which does
+    paginate with ?page=N, or run with --concurrency 1.
 
----
-
-## Selenium: `--cdp-endpoint` or `--proxy` does not work
-
-Both are real limits of the driver, not of this code, and both are refused or
-warned about rather than silently failing:
-
-- **An authenticated CDP endpoint is impossible.** Playwright's
-  `connect_over_cdp` and pyppeteer's `browserWSEndpoint` take a full
-  `ws://user:pass@host:port` and authenticate on the WebSocket upgrade.
-  chromedriver's `debuggerAddress` takes a bare `host:port` with nowhere to
-  put a password.
-- **An authenticated proxy is impossible.** `--proxy-server=` accepts no
-  credentials and there is no equivalent of pyppeteer's `page.authenticate`.
-  This repo strips the credentials and warns. On Etsy that means the
-  proxy will not authenticate and every page will be a 403 — so use the
-  Playwright or pyppeteer engine when your exits need a password.
+A category listing accepts it. Note it is also refused with
+`--cdp-endpoint`: a Scraping Browser profile allows one live connection, so
+workers collide with `profile_locked`. Use several `pid`s, one run each.
 
 ---
 
-## A run stopped early and reported `partial` (exit 6)
+## `pytest` or `python3 smoke_test.py` fails after an edit
 
-The sidecar says which pages failed, by number:
+The suite pins **values**, not coverage — the expected price, rating, sold
+count and title for named products — because a column can be 100% populated
+and entirely wrong. A failure names the product and the field.
 
-```json
-{"status": "partial", "stop_reason": "blocked_datadome-bv",
- "pages_requested": 20, "pages_completed": 7, "pages_failed": [8]}
-```
+Two checks are worth knowing about before you edit an engine:
 
-`pages_completed` alone is not enough once pages can be fetched
-concurrently — page 8 can fail while 9 and 10 succeed — which is why the list
-is there. `diff_runs.py` refuses to compare a partial run against anything,
-because its un-fetched pages would read as delisted products.
-
-If `stop_reason` is a block partway through a long run, you are probably
-burning one address too fast. Spread it: `--proxy-file` with more exits, or a
-larger `--delay`.
-
----
-
-## pyppeteer prints a traceback AFTER a successful run
-
-Looks like this, after the output has already been written:
-
-```
-[+] Saved 74 products -> shop.json
-[+] Wrote run metadata -> shop.meta.json (status=complete)
-Exception ignored in: <coroutine object Connection._recv_loop at 0x...>
-...
-RuntimeError: Event loop is closed
-```
-
-**The run succeeded.** Check the exit code — it is 0 — and check the output
-files, which are already on disk. This is pyppeteer's websocket coroutine
-being collected at interpreter shutdown, printed by CPython's own garbage
-collector rather than by anything in this repo.
-
-Everything that CAN be suppressed is: the engine cancels pyppeteer's pending
-tasks before stopping its loop, and its loop exception handler swallows the
-teardown messages (`Target closed`, `Connection closed`, `Task was destroyed
-but it is pending`, `No session with given id`). After those, ERROR-level
-output on a successful run is zero. What is left arrives after the loop is
-gone and after the exit code is decided, so nothing in the process is still
-listening — suppressing it would mean installing a global unraisable-exception
-hook, which would also swallow real bugs. That trade is worse than the noise.
-
-`playwright_scraper.py` does not do this, and it is the recommended engine on
-this site anyway.
+- **Every `page_flow.*` and `product_parser.*` call in every engine is bound
+  against the real signature.** This is the general form of a bug the first
+  live run found: `classify(html, status, url)` took `status` positionally
+  while two of the three engines called it as `classify(html, url=…)`, and
+  both crashed on their first fetch — invisible to import, `--help`,
+  `compileall`, the AST undefined-name walk and 400+ green checks.
+- **The readiness wait must not evaluate a string.** Tokopedia's
+  Content-Security-Policy has no `unsafe-eval`, so Playwright's
+  `wait_for_function` raises `EvalError` on a `/search` page and takes the
+  run down. Poll `querySelectorAll` over CDP instead; `page.evaluate` with a
+  real function is fine.
 
 ---
 
-## `pip check` complains after installing two engines
+## pyppeteer prints a wall of asyncio tracebacks after a successful run
 
-Expected. playwright and pyppeteer pin incompatible `pyee` versions, and
-pyppeteer and selenium collide on `urllib3`. They do run side by side in
-practice because neither library touches the incompatible part, but pip may
-resolve the conflict by downgrading something you wanted. Use a virtualenv
-per engine.
+Cosmetic, and after exit 0:
+
+    Exception ignored in: <coroutine object …close_connection …>
+    RuntimeError: Event loop is closed
+    RuntimeWarning: coroutine 'WebSocketCommonProtocol.write_close_frame'
+                    was never awaited
+
+pyppeteer's WebSocket teardown races the interpreter shutdown. The engine
+installs an asyncio exception handler that silences the ones it can reach;
+these last few are emitted by the interpreter itself, after the loop is
+already gone, and there is nowhere left to catch them. The run succeeded —
+check the exit code and the output files, both of which are unaffected.
+Swallowing them by muting the interpreter's own warnings would hide real
+faults of the same shape, which is why they are documented here instead. **pyppeteer is effectively unmaintained** and
+its own README points at Playwright.
 
 ---
 
-## Something else
+## Selenium cannot reach the site at all
 
-`python3 smoke_test.py` runs 339 checks with no network, no browser and no
-credentials. If it passes and a live run still misbehaves, the problem is in
-the fetch rather than the parse — which narrows it to the exit address, the
-engine, or the URL. If it fails, the message names the check.
+`selenium_scraper.py` cannot use an authenticated remote CDP endpoint, and
+that is a limitation of chromedriver rather than of this repo: Playwright's
+`connect_over_cdp` and pyppeteer's `browserWSEndpoint` take a full
+`ws://user:pass@host:port` and authenticate on the WebSocket upgrade, while
+chromedriver's `debuggerAddress` takes a bare `host:port` with nowhere to put
+a password. Its `--proxy-server` cannot authenticate either — credentials are
+stripped and a warning printed.
 
-Open an issue with: the exact command (with credentials removed), the log,
-the `.meta.json` sidecar, and — if you can — the `--dump-html` output.
+So on this site, where a plain address gets no response, Selenium needs a
+local browser on an exit Tokopedia already accepts. It is kept for parity and
+correctness, not because it is the way in.
+
+---
+
+## Where to look next
+
+- `product_parser.py`'s module docstring — what is and is not readable on
+  each page kind, and why the reads are text-order based.
+- `page_flow.py`'s module docstring — the page-state policy, the scroll rule
+  and the pagination split, all as data.
+- The README's access section — every access measurement with its date.
+- `CHANGELOG.md` — what changed and what it breaks.

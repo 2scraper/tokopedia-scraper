@@ -4,7 +4,7 @@
 #
 #   docker build -t tokopedia-scraper .
 #   docker run --rm -v "$PWD/out:/out" tokopedia-scraper \
-#     --url "https://www.etsy.com/search?q=handmade+mug" \
+#     --url "https://www.tokopedia.com/p/makanan-minuman/minuman/kopi-bubuk" \
 #     --pages 3 --out /out/mugs
 #
 # Pass --proxy/--twocaptcha-key the same way as running locally, or mount a
