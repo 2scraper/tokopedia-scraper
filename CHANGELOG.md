@@ -11,6 +11,27 @@ with it, so nobody discovers it from a bill or from a diff.
 
 ---
 
+## [0.1.3] — 2026-09-11
+
+### Fixed
+
+- **`--fingerprint` dropped `deviceScaleFactor`, so the identity
+  contradicted itself.** `playwright_context_kwargs` mapped the user agent,
+  the locale, the timezone and the screen onto the browser context and
+  ignored the scale factor the fingerprint API returns beside them. Measured
+  2026-09-11 against the live API and a live browser: a fingerprint stating
+  `deviceScaleFactor: 1.25` produced a browser reporting
+  `window.devicePixelRatio === 1` — the paid identity saying one thing and
+  the browser another, on every run, silently, on an axis any fingerprinter
+  reads for free. Playwright takes it as its own context option, so the fix
+  is to pass it; verified in a live browser both ways and pinned in the
+  offline suite.
+
+  Found while auditing a new sibling repo against the family notes. All five
+  repos in this family had it.
+
+---
+
 ## [0.1.2] — 2026-09-10
 
 Captcha detection, after being asked a question the artefacts could answer:
