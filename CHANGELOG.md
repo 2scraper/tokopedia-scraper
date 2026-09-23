@@ -39,6 +39,8 @@ with it, so nobody discovers it from a bill or from a diff.
 - **`captcha_solver.py`'s docstring pointed at a "No DataDome solver" section
   that does not exist** — it went with the solver in 0.1.0. The sentence now
   says where the explanation is.
+- **A smoke-test comment described "MediaMarkt's pages" as if this site's**;
+  it now names mediamarkt-scraper as the sibling it came from.
 
 ## [0.1.5] — 2026-09-16
 
