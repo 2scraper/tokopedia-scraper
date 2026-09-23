@@ -139,9 +139,15 @@ def _redact_debug_header(value: str) -> str:
                                _CREDS_IN_TEXT_RE.sub(r"\1***:***@", value))
 
 
-def _build_wait_for(args) -> Optional[str]:
-    """`waitFor` must be a JSON STRING (double-encoded), per the API docs.
-    Passing a nested object is silently wrong.
+def _build_wait_for(args) -> Optional[dict]:
+    """`waitFor` is sent as a JSON OBJECT.
+
+    This docstring used to say the opposite -- that the API wanted it as a
+    double-encoded string -- and the client built it that way. Measured
+    2026-09-23 against /tasks/sync: the string form is refused with HTTP
+    422 ("params.waitFor must be an object") and the call is STILL BILLED
+    ($0.0005); the same request with an object answers HTTP 200. So every
+    --wait-* flag was a paid exit 5.
 
     Default (no flag): wait for the DOM. On a challenge-protected page
     that resolves instantly against the challenge page itself — which is
@@ -149,11 +155,11 @@ def _build_wait_for(args) -> Optional[str]:
     --wait-text/--wait-element exist to wait on something only the real
     page can contain."""
     if args.wait_text:
-        return json.dumps({"text": args.wait_text})
+        return {"text": args.wait_text}
     if args.wait_element:
-        return json.dumps({"element": args.wait_element, "checkVisible": True})
+        return {"element": args.wait_element, "checkVisible": True}
     if args.wait_state:
-        return json.dumps({"state": args.wait_state})
+        return {"state": args.wait_state}
     return None
 
 
@@ -162,14 +168,14 @@ def fetch_html(args) -> str:
         "task_type": "scrape",
         "url": args.url,
         "data_format": "raw",   # we want HTML; product_parser does the rest
-        "format": "json",       # so we get {"status", "headers", "body"}
+        "format": "json",       # {"status": verdict, "http_code", "headers", "body"}
         "timeout": min(args.timeout, MAX_API_TIMEOUT),
     }
 
     wait_for = _build_wait_for(args)
     if wait_for:
         payload["waitFor"] = wait_for
-        logger.info("waitFor: %s", wait_for)
+        logger.info("waitFor: %s", json.dumps(wait_for, ensure_ascii=False))
 
     if args.cdp_url:
         payload["cdpurl"] = args.cdp_url
@@ -204,8 +210,16 @@ def fetch_html(args) -> str:
 
     body = resp.json()
     html = body.get("body") or ""
-    upstream_status = body.get("status")
-    logger.info("Upstream page status %s, %d bytes of HTML.", upstream_status, len(html))
+    # The TARGET's HTTP code is `http_code`. `status` is the API's own
+    # verdict STRING ("success") -- measured 2026-09-23 -- and reading it
+    # here handed "success" to detect_page_state, so a target 403/503 was
+    # never seen. `status` is kept as a fallback only if it is an int.
+    upstream_status = body.get("http_code")
+    if not isinstance(upstream_status, int):
+        legacy = body.get("status")
+        upstream_status = legacy if isinstance(legacy, int) else None
+    logger.info("Upstream page status %s (target HTTP code, from http_code), %d bytes of HTML.",
+                upstream_status, len(html))
     # The STATUS is returned alongside the HTML, not thrown away. It used to
     # be, and that cost this engine the family's central distinction. On this
     # site a refusal carries no markup at all — nothing a challenge check

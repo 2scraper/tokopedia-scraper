@@ -2850,6 +2850,57 @@ def test_x_debug_header_is_redacted():
     return ok
 
 
+def test_scraper_api_waitfor_is_an_object():
+    """Both Scraper API defects measured 2026-09-23, through the real
+    parse_args() and fetch_html(), with requests.post captured (no network).
+
+    waitFor went out as a JSON-encoded STRING, which the live API refuses
+    with HTTP 422 and still bills; and the target's status was read from
+    `status`, which is the API's own verdict string ("success"), so a
+    target 403/503 never reached detect_page_state. The real field is
+    `http_code`."""
+    group("Scraper API: waitFor is an object, the target status is http_code")
+    try:
+        import scraper_api_client as sac
+    except ImportError as e:
+        return check("scraper_api_client imports (%s)" % e, False)
+
+    captured = {}
+
+    class _Resp:
+        status_code = 200
+        headers = {}
+        text = ""
+
+        def json(self):
+            return {"status": "success", "http_code": 403, "headers": {},
+                    "body": "<html></html>"}
+
+    def _post(url, **kw):
+        captured.update(kw)
+        return _Resp()
+
+    real_post, real_argv = sac.requests.post, sys.argv
+    sac.requests.post = _post
+    sys.argv = ["scraper_api_client.py", "--key", "k" * 8,
+                "--url", "https://www.tokopedia.com/p/makanan-minuman/minuman/kopi-bubuk", "--wait-text", "Kopi"]
+    status = None
+    try:
+        args = sac.parse_args()
+        got = sac.fetch_html(args)
+        status = got[1] if isinstance(got, tuple) else None
+    finally:
+        sac.requests.post, sys.argv = real_post, real_argv
+    wf = (captured.get("json") or {}).get("waitFor")
+    ok = check("Scraper API: --wait-text sends waitFor as an OBJECT, not a "
+               "JSON-encoded string (HTTP 422 and still billed, 2026-09-23)",
+               isinstance(wf, dict) and wf.get("text") == "Kopi")
+    ok &= check("Scraper API: the status handed onward is the target's "
+                "http_code (403, an int), not the API's verdict 'success'",
+                isinstance(status, int) and status == 403)
+    return ok
+
+
 def test_parse_is_gated_on_the_policy():
     group("the engines read STATE_POLICY's parse column")
     ok = True
@@ -2924,6 +2975,7 @@ def main() -> int:
     ok &= test_dockerfile_copies_what_it_runs()
     ok &= test_sample_output()
     ok &= test_x_debug_header_is_redacted()
+    ok &= test_scraper_api_waitfor_is_an_object()
 
     print()
     if _failures:
