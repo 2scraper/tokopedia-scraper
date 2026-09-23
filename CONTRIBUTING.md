@@ -117,17 +117,10 @@ Then the rest of the presentation, in the order that matters:
 file of plain functions with inline HTML/JSON fixtures — no pytest, no
 conftest, no fixtures directory. Copy the nearest existing check and edit it.
 
-Five properties in this repo exist because they were once absent and cost real
-time. Tests pin all five, so a PR that breaks one will fail rather than
+These properties exist because they were once absent and cost real time.
+Tests pin them, so a PR that breaks one will fail rather than
 silently regress:
 
-- **`rating` is the LISTING's and `shop_rating` is the SELLER's.** The stars
-  printed on a tile are the shop's — every seller with more than one listing
-  on a captured page showed the same rating and count on all of them, 12
-  shops across two page kinds. A listing's own rating exists only on its
-  detail page, where two listings of one shop report 825 and 375 reviews
-  while their shop reports 16,679. Folding them into one column would make it
-  mean different things in different modes.
 - **`sku` is the `/{shop}/{slug}` URL path, NOT the 19-digit tail most
   slugs end in.** That tail is not the product id — the id Tokopedia's own
   app deep links use is `103490518624` for a product whose tail is
@@ -210,7 +203,7 @@ not a verification: the first live run of the pyppeteer engine crashed on its
 FIRST fetch on a signature mismatch that four separate offline checks and 400
 green assertions had not caught.
 
-Do not add anything that submits the registration form. This project
+Do not add anything that submits a registration or login form. This project
 deliberately never does, and a captcha token proved valid by creating a real
 account is not a result worth having.
 
