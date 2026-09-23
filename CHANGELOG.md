@@ -42,6 +42,9 @@ with it, so nobody discovers it from a bill or from a diff.
 - **A smoke-test comment described "MediaMarkt's pages" as if this site's**;
   it now names mediamarkt-scraper as the sibling it came from.
 
+- `SECURITY.md` said this project has no releases or version tags; it has
+  both. "Supported versions" now names the latest release and `main`.
+
 ## [0.1.5] — 2026-09-16
 
 ### Fixed
