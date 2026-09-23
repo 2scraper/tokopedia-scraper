@@ -11,6 +11,40 @@ with it, so nobody discovers it from a bill or from a diff.
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **Leftovers from the repo this one was bootstrapped from (etsy-scraper)
+  removed from the files a reader meets first.** The bug-report and
+  site-change issue templates still described Etsy — DataDome answering
+  datacentre IPs with 403, the `t=bv` challenge, `shop_rating`, `/fr/`
+  storefront redirects, a `lowest_price_30d` tile overlay, JSON-LD as the
+  primary path and an `etsy.com` example URL. They now describe what this
+  README measures on Tokopedia: an address it has scored gets no response
+  at all, a category listing prints no rating, sold count or was-price, and
+  a listing page carries no structured data. `SECURITY.md` said "Etsy
+  changing its markup is expected"; it now says Tokopedia.
+- **`CONTRIBUTING.md` listed a "`rating` vs `shop_rating`" property this repo
+  does not have** — no `shop_rating` column exists here, and its figures
+  (825, 375 and 16,679 reviews) were Etsy's. Removed, along with the stale
+  "five properties" count above a list of eight. A comment in
+  `output_writer.py` used `shop_rating` as its example sidecar field; it now
+  names `scroll`, which this repo's engines really write there.
+- **`CONTRIBUTING.md` described a structured-price confirmation share with
+  Etsy's per-page-kind floors (search 8%, category 70%, shop 80%).** This
+  repo has no structured price on a listing and no shop page kind; the
+  engines deliberately log plain price coverage against `PRICE_FLOOR` (95%)
+  instead, and the paragraph now says that.
+- **`captcha_solver.py`'s docstring pointed at a "No DataDome solver" section
+  that does not exist** — it went with the solver in 0.1.0. The sentence now
+  says where the explanation is.
+- **A smoke-test comment described "MediaMarkt's pages" as if this site's**;
+  it now names mediamarkt-scraper as the sibling it came from.
+
+- `SECURITY.md` said this project has no releases or version tags; it has
+  both. "Supported versions" now names the latest release and `main`.
+
 ## [0.1.5] — 2026-09-16
 
 ### Fixed

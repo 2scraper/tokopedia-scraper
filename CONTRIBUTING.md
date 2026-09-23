@@ -66,14 +66,12 @@ The one place structured data does exist is a DETAIL page's
 `window.__cache` Apollo blob, which is where `--mode product` reads the real
 product id, the exact sold count and the review count.
 
-A third thing can break without any path failing: the **join** between the
-tiles and the structured data. When it breaks, the row count and the prices
-stay healthy while `in_stock` and part of `brand` quietly empty out — so
-every run logs its structured-price confirmation share per page and warns
-below a floor set PER PAGE KIND (search 8%, category 70%, shop 80%; the
-achievable share differs by a factor of eight between them). If you are
-reporting a change, that percentage and the page kind are the numbers to
-include.
+A third thing can break without the row count dropping: a field read.
+There is no structured price on a listing page to cross-check against, so
+every run logs its plain price coverage per page and warns below a floor set
+per page kind (`PRICE_FLOOR` in the engines: 95% on search and category,
+measured 95/95 and 60/60 on the captures). If you are reporting a change,
+that percentage and the page kind are the numbers to include.
 
 `--dump-html PATH` writes the exact bytes the parser was given, on success as
 well as failure, and a run that finds nothing writes a dump and a screenshot
@@ -117,17 +115,10 @@ Then the rest of the presentation, in the order that matters:
 file of plain functions with inline HTML/JSON fixtures — no pytest, no
 conftest, no fixtures directory. Copy the nearest existing check and edit it.
 
-Five properties in this repo exist because they were once absent and cost real
-time. Tests pin all five, so a PR that breaks one will fail rather than
+These properties exist because they were once absent and cost real time.
+Tests pin them, so a PR that breaks one will fail rather than
 silently regress:
 
-- **`rating` is the LISTING's and `shop_rating` is the SELLER's.** The stars
-  printed on a tile are the shop's — every seller with more than one listing
-  on a captured page showed the same rating and count on all of them, 12
-  shops across two page kinds. A listing's own rating exists only on its
-  detail page, where two listings of one shop report 825 and 375 reviews
-  while their shop reports 16,679. Folding them into one column would make it
-  mean different things in different modes.
 - **`sku` is the `/{shop}/{slug}` URL path, NOT the 19-digit tail most
   slugs end in.** That tail is not the product id — the id Tokopedia's own
   app deep links use is `103490518624` for a product whose tail is
@@ -210,7 +201,7 @@ not a verification: the first live run of the pyppeteer engine crashed on its
 FIRST fetch on a signature mismatch that four separate offline checks and 400
 green assertions had not caught.
 
-Do not add anything that submits the registration form. This project
+Do not add anything that submits a registration or login form. This project
 deliberately never does, and a captcha token proved valid by creating a real
 account is not a result worth having.
 
