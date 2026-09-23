@@ -23,7 +23,9 @@ links before paying, `page_flow.SOLVES_PER_PAGE` caps a page at one
 purchase, and `page_flow.STATE_POLICY` — not this file — decides which state
 is worth money at all.
 
-There is deliberately no DataDome path here. See "No DataDome solver" below.
+There is deliberately no DataDome path here. The one inherited from
+etsy-scraper was removed in 0.1.0: Tokopedia serves no DataDome page, so it
+could never fire (see CHANGELOG.md).
 
 Flow:
   1. Both detectors run and are reconciled (see reconcile_detections) to decide
