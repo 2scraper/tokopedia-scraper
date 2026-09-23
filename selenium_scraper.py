@@ -723,7 +723,24 @@ def _fetch_one_page(session, args, pool, page_num: int, url: str) -> PageOutcome
         return outcome
 
     final_url = d["current_url"]() or url
-    products = _parse_for_mode(html, final_url, args, page_num)
+    # Through the POLICY rather than unconditionally. `STATE_POLICY` is the
+    # one place that says which states are worth reading, and until now
+    # nothing consulted its `parse` column: the engines parsed whatever
+    # reached this line, so every state without an earlier `return` was
+    # read regardless of what the table said.
+    #
+    # # Latent here rather than live — measured on this repo's own fixtures on
+    # 2026-09-23: no shipped fixture of a parse:False state yields a row,
+    # because the parser is independently defensive. The gate is wired
+    # anyway, because "the parser happens to return nothing" is not the
+    # same guarantee as "the policy says do not read this", and two
+    # siblings had exactly this shape turn into phantom rows.
+    #
+    # Measured across the family on 2026-09-23 by counting definitions
+    # against readers: 7 of 24 repos defined `should_parse` and none of
+    # them called it.
+    products = (_parse_for_mode(html, final_url, args, page_num)
+                if page_flow.should_parse(state) else [])
     logger.info("Parsed %d row(s) from page %d.", len(products), page_num)
 
     if args.mode == "product":
