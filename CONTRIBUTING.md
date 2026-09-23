@@ -66,14 +66,12 @@ The one place structured data does exist is a DETAIL page's
 `window.__cache` Apollo blob, which is where `--mode product` reads the real
 product id, the exact sold count and the review count.
 
-A third thing can break without any path failing: the **join** between the
-tiles and the structured data. When it breaks, the row count and the prices
-stay healthy while `in_stock` and part of `brand` quietly empty out — so
-every run logs its structured-price confirmation share per page and warns
-below a floor set PER PAGE KIND (search 8%, category 70%, shop 80%; the
-achievable share differs by a factor of eight between them). If you are
-reporting a change, that percentage and the page kind are the numbers to
-include.
+A third thing can break without the row count dropping: a field read.
+There is no structured price on a listing page to cross-check against, so
+every run logs its plain price coverage per page and warns below a floor set
+per page kind (`PRICE_FLOOR` in the engines: 95% on search and category,
+measured 95/95 and 60/60 on the captures). If you are reporting a change,
+that percentage and the page kind are the numbers to include.
 
 `--dump-html PATH` writes the exact bytes the parser was given, on success as
 well as failure, and a run that finds nothing writes a dump and a screenshot
