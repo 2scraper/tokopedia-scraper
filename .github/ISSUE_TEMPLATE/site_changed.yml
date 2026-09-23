@@ -1,5 +1,5 @@
 name: Site changed / selectors broke
-description: Etsy changed something and the parser no longer matches.
+description: Tokopedia changed something and the parser no longer matches.
 labels: ["site-change"]
 body:
   - type: markdown
@@ -7,10 +7,14 @@ body:
       value: |
         This is the most common way a scraper stops working, and it is worth its
         own report because the fix is different from a code bug: something on
-        etsy.com moved.
+        tokopedia.com moved.
 
-        Useful to know before filing: the parser tries **JSON-LD first**, then a
-        CSS + URL-pattern fallback. Which one broke narrows the fix a lot.
+        Useful to know before filing: a listing page carries no structured
+        data at all, so the parser reads the rendered grid — the grid
+        container, the tile marker, and the reading order inside a tile.
+        Which of those broke narrows the fix a lot; CONTRIBUTING.md lists
+        them. A product page (`--mode product`) also reads the page's own
+        `window.__cache` Apollo blob.
 
   - type: dropdown
     id: what_broke
@@ -19,8 +23,7 @@ body:
       options:
         - Products (0 rows on a page that visibly has products)
         - A specific field is null or wrong (price, sku, image, URL)
-        - original_price or lowest_price_30d empty out (the tile overlay)
-        - DOM price confirmation dropped below 90% in the run log
+        - The structured-price confirmation share warned below its per-page-kind floor in the run log
         - Pagination stops early or repeats a page
         - The captcha detector finds nothing on a page that has one
         - Something else
@@ -32,7 +35,7 @@ body:
     attributes:
       label: URL
       description: The exact listing URL, and the country your exit IP was in.
-      placeholder: "https://www.etsy.com/search?q=handmade+mug (locale: /de/, exit IP: DE residential, Scraping Browser pid: etsy1)"
+      placeholder: "https://www.tokopedia.com/search?st=product&q=kopi (exit IP: ID residential, Scraping Browser pid: toko1)"
     validations:
       required: true
 
@@ -43,9 +46,10 @@ body:
       description: |
         Whichever of these you can get. A capture beats a description.
 
-        - JSON-LD as the page actually serves it:
-          `python3 -c "import json,sys,re;h=open('dump.html').read();print([m[:400] for m in re.findall(r'<script type=\"application/ld\\+json\">(.*?)</script>',h,re.S)][:2])"`
-        - Or open devtools and paste one `Product` node from the `ItemList`.
+        - The exact bytes the parser was given: rerun with
+          `--dump-html dump.html` (it writes on success too) and attach it,
+          with credentials and session values removed.
+        - Or open devtools and paste one tile's outer HTML from the grid.
         - For a field problem: the value you got, and the value on the page.
       render: text
     validations:

@@ -11,6 +11,27 @@ with it, so nobody discovers it from a bill or from a diff.
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **Leftovers from the repo this one was bootstrapped from (etsy-scraper)
+  removed from the files a reader meets first.** The bug-report and
+  site-change issue templates still described Etsy — DataDome answering
+  datacentre IPs with 403, the `t=bv` challenge, `shop_rating`, `/fr/`
+  storefront redirects, a `lowest_price_30d` tile overlay, JSON-LD as the
+  primary path and an `etsy.com` example URL. They now describe what this
+  README measures on Tokopedia: an address it has scored gets no response
+  at all, a category listing prints no rating, sold count or was-price, and
+  a listing page carries no structured data. `SECURITY.md` said "Etsy
+  changing its markup is expected"; it now says Tokopedia.
+- **`CONTRIBUTING.md` listed a "`rating` vs `shop_rating`" property this repo
+  does not have** — no `shop_rating` column exists here, and its figures
+  (825, 375 and 16,679 reviews) were Etsy's. Removed, along with the stale
+  "five properties" count above a list of eight. A comment in
+  `output_writer.py` used `shop_rating` as its example sidecar field; it now
+  names `scroll`, which this repo's engines really write there.
+
 ## [0.1.5] — 2026-09-16
 
 ### Fixed
