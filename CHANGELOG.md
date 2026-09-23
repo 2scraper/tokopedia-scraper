@@ -31,6 +31,11 @@ with it, so nobody discovers it from a bill or from a diff.
   "five properties" count above a list of eight. A comment in
   `output_writer.py` used `shop_rating` as its example sidecar field; it now
   names `scroll`, which this repo's engines really write there.
+- **`CONTRIBUTING.md` described a structured-price confirmation share with
+  Etsy's per-page-kind floors (search 8%, category 70%, shop 80%).** This
+  repo has no structured price on a listing and no shop page kind; the
+  engines deliberately log plain price coverage against `PRICE_FLOOR` (95%)
+  instead, and the paragraph now says that.
 
 ## [0.1.5] — 2026-09-16
 

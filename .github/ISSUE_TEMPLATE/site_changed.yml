@@ -23,7 +23,7 @@ body:
       options:
         - Products (0 rows on a page that visibly has products)
         - A specific field is null or wrong (price, sku, image, URL)
-        - The structured-price confirmation share warned below its per-page-kind floor in the run log
+        - Price coverage warned below its per-page-kind floor in the run log
         - Pagination stops early or repeats a page
         - The captcha detector finds nothing on a page that has one
         - Something else
