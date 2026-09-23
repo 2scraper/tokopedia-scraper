@@ -36,6 +36,9 @@ with it, so nobody discovers it from a bill or from a diff.
   repo has no structured price on a listing and no shop page kind; the
   engines deliberately log plain price coverage against `PRICE_FLOOR` (95%)
   instead, and the paragraph now says that.
+- **`captcha_solver.py`'s docstring pointed at a "No DataDome solver" section
+  that does not exist** — it went with the solver in 0.1.0. The sentence now
+  says where the explanation is.
 
 ## [0.1.5] — 2026-09-16
 
