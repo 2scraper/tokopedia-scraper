@@ -12,24 +12,22 @@ body:
 
         Two things answer most reports faster than we can:
 
-        - **Everything exit 3?** Check the exit address first. Etsy's
-          DataDome answers every datacentre and VPN IP with HTTP 403, so a run
-          from a VPS or a CI runner is blocked whatever else is set. If the
-          log says `t=bv`, a captcha key does not help — that challenge is
-          not solvable. The Scraping Browser API (`--cdp-endpoint`) is the
-          path that works; if a profile keeps refusing after three retries,
-          try a different `pid`.
-        - **Zero products?** You may be on a page that has none — a taxonomy
-          hub, or one page past the end of a listing. It answers 200 with
-          nothing on it, which is exit 4 and a correct answer. See
+        - **Nothing comes back at all, or exit 3?** Check the exit address
+          first. Tokopedia does not refuse an address it has scored, it
+          ignores it: the connection opens and is reset, with no status, no
+          challenge and no error page. A captcha key does not help, because
+          there is no challenge to solve. Any residential exit clears it,
+          whatever the country; the Scraping Browser API (`--cdp-endpoint`)
+          is the path every README measurement was taken through. See
           [TROUBLESHOOTING.md](../blob/main/TROUBLESHOOTING.md).
-        - **`rating` empty on every row?** That is expected on a listing run:
-          Etsy publishes no per-listing rating there. The stars you see on a
-          tile are the shop's and are in `shop_rating`. See the README.
-        - **Wrong currency or language?** Etsy decides both from your exit
-          IP, not from the URL — a request for `/fr/…` from a German exit is
-          redirected to `/de/…`. The row's `url` says which storefront
-          actually answered.
+        - **Zero products?** You may be on a page that has none — a hub
+          category with only recommendation carousels, or one page past the
+          end of a listing. That is exit 4 and a correct answer.
+        - **`rating`, `sold` or `original_price` empty on every row?** That
+          is expected on a category listing: that page kind prints none of
+          them. A search grid and `--mode product` do. See the README.
+        - **`image_url` or `slug_id` null on part of the rows?** Also
+          expected, and the README says how much and why.
 
   - type: dropdown
     id: engine
@@ -77,8 +75,8 @@ body:
       render: shell
       placeholder: |
         python3 playwright_scraper.py \
-          --url "https://www.etsy.com/search?q=handmade+mug" \
-          --pages 3 --out grills
+          --url "https://www.tokopedia.com/p/makanan-minuman/minuman/kopi-bubuk" \
+          --pages 3 --out kopi
     validations:
       required: true
 
@@ -98,7 +96,7 @@ body:
     attributes:
       label: What you expected instead
       placeholder: >-
-        96 products, as the README says a category page yields.
+        119 rows from two category pages, as the README's healthy run shows.
     validations:
       required: true
 
