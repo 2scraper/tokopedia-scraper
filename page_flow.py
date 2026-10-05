@@ -491,3 +491,33 @@ def concurrency_refusal(url: str) -> Optional[str]:
 def comparable(url: str) -> str:
     """A URL reduced to what identifies the page, for dedupe and comparison."""
     return strip_tracking(url)
+
+
+def cdp_failure_hint(text: str) -> str:
+    """One next step for a failed --cdp-endpoint connection, chosen by cause.
+
+    The message used to say "a 500 usually means another run holds this pid"
+    whatever had happened. Measured 2026-10-05: an expired profile answers
+    HTTP 401 `deny_no_user` and an unresolvable host raises ENOTFOUND, and
+    neither is helped by a different pid. Pure text in, text out, so all three
+    engines can share it. `text` should already be credential-masked.
+    """
+    low = (text or "").lower()
+    if "401" in low or "deny_no_user" in low or "unauthorized" in low:
+        return ("The endpoint refused the credentials (HTTP 401). A Scraping "
+                "Browser profile's login expires after about a day - fetch a "
+                "fresh endpoint and update TOKOPEDIA_CDP_ENDPOINT.")
+    if any(k in low for k in ("enotfound", "getaddrinfo", "name or service",
+                              "nodename nor servname", "name resolution")):
+        return ("The endpoint's host did not resolve. Check the host name in "
+                "--cdp-endpoint and this machine's DNS/network; changing the "
+                "pid will not help.")
+    if "profile_locked" in low or " 500" in low or "http 500" in low:
+        return ("A Scraping Browser profile allows ONE live connection at a "
+                "time, so a 500 usually means another run still holds this "
+                "`pid`. Wait for it to finish, or use a different pid.")
+    if "timeout" in low or "timed out" in low:
+        return ("The endpoint did not answer in time. Retry, and check that "
+                "port 9222 is reachable from this network.")
+    return ("The connection failed for a reason this tool does not recognise; "
+            "the error above is the remote side's own.")

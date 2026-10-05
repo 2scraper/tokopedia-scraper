@@ -2850,6 +2850,53 @@ def test_x_debug_header_is_redacted():
     return ok
 
 
+def test_writes_are_atomic():
+    """A failed write must leave the previous good file byte-for-byte intact."""
+    import json, os, stat, tempfile
+    import output_writer as ow
+    print("\n[atomic writes]")
+    ok = True
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "out.json")
+        ow.write_json([], path)
+        good = open(path, "rb").read()
+        class Boom:
+            def __iter__(self):
+                raise RuntimeError("disk full")
+        try:
+            ow.write_json(Boom(), path)
+            raised = False
+        except RuntimeError:
+            raised = True
+        ok &= check("a write that fails raises", raised)
+        ok &= check("...and the previous good file is untouched",
+                    open(path, "rb").read() == good)
+        ok &= check("...and no temp file is left beside it",
+                    os.listdir(d) == ["out.json"])
+        mode = stat.S_IMODE(os.stat(path).st_mode)
+        ok &= check("output is not left 0600 by the temp file (mode %o)" % mode,
+                    mode != 0o600 or os.umask(os.umask(0)) & 0o077 == 0o077)
+        meta = ow.write_run_meta(os.path.join(d, "run"), {"status": "complete"})
+        ok &= check("sidecar is written and valid JSON",
+                    json.load(open(meta))["status"] == "complete")
+    return ok
+
+
+def test_cdp_failure_hint_names_the_real_cause():
+    import page_flow
+    print("\n[cdp failure hint]")
+    h = page_flow.cdp_failure_hint
+    ok = True
+    ok &= check("401 deny_no_user -> expired credentials, not pid",
+                "401" in h("HTTP 401 deny_no_user") and "pid" not in h("HTTP 401 deny_no_user"))
+    ok &= check("ENOTFOUND -> DNS, not pid",
+                "resolve" in h("getaddrinfo ENOTFOUND cb.x") and "different pid" not in h("getaddrinfo ENOTFOUND cb.x"))
+    ok &= check("HTTP 500 -> profile held, use another pid",
+                "different pid" in h("unexpected server response: HTTP 500"))
+    ok &= check("unknown cause makes no pid claim", "pid" not in h("weird"))
+    return ok
+
+
 def test_scraper_api_waitfor_is_an_object():
     """Both Scraper API defects measured 2026-09-23, through the real
     parse_args() and fetch_html(), with requests.post captured (no network).
@@ -2976,6 +3023,8 @@ def main() -> int:
     ok &= test_sample_output()
     ok &= test_x_debug_header_is_redacted()
     ok &= test_scraper_api_waitfor_is_an_object()
+    ok &= test_writes_are_atomic()
+    ok &= test_cdp_failure_hint_names_the_real_cause()
 
     print()
     if _failures:
