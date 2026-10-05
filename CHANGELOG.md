@@ -13,7 +13,16 @@ with it, so nobody discovers it from a bill or from a diff.
 
 ## [Unreleased]
 
+## [0.1.5] — 2026-10-05
+
+> **Behaviour changes for existing users.** A run that gathered nothing and
+> did not finish now exits **5** (it was 4, "empty"); a run with failed pages
+> is `partial`/exit 6 (it was `complete`); output files are now written
+> atomically; and CSV cells beginning with a formula character carry a leading
+> apostrophe. Details below.
+
 ### Fixed
+
 
 - **A failed `--cdp-endpoint` connection now names its real cause.** The
   Playwright engine appended "a 500 here usually means another run still holds
@@ -76,10 +85,6 @@ with it, so nobody discovers it from a bill or from a diff.
 
 - `SECURITY.md` said this project has no releases or version tags; it has
   both. "Supported versions" now names the latest release and `main`.
-
-## [0.1.5] — 2026-09-16
-
-### Fixed
 
 - **Fifteen lines of unreachable code removed from `playwright_scraper.py`.**
   A function's `def` line had been lost at some point before this repo's
