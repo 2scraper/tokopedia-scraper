@@ -109,7 +109,7 @@ from product_parser import (parse_products, parse_product_page,
                             served_by_tokopedia)
 from output_writer import dedupe_by_key, finish_run, EXIT_API_ERROR
 import page_flow
-from page_flow import MIN_CARD_MATCHES
+from page_flow import MIN_CARD_MATCHES, cdp_failure_hint
 from proxy_pool import (from_args as proxy_pool_from_args, to_playwright, mask,
                         ROTATE_MODES, ProxyError, ProxyPool)
 import env_config
@@ -520,9 +520,7 @@ def _connect_remote(pw, args):
             f"could not connect to --cdp-endpoint "
             f"{_mask_credentials(args.cdp_endpoint)}: "
             f"{_mask_credentials(str(e))}\n"
-            f"A Scraping Browser profile allows ONE live connection at a "
-            f"time, so a 500 here usually means another run still holds this "
-            f"`pid`. Wait for it to finish, or use a different pid."
+            f"{cdp_failure_hint(_mask_credentials(str(e)))}"
         ) from None
     # Reuse the remote browser's existing context so its
     # fingerprint/session/proxy settings stay intact.

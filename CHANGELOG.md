@@ -15,6 +15,27 @@ with it, so nobody discovers it from a bill or from a diff.
 
 ### Fixed
 
+- **A failed `--cdp-endpoint` connection now names its real cause.** The
+  Playwright engine appended "a 500 here usually means another run still holds
+  this `pid`" to every connection error. Measured 2026-10-05: an expired
+  profile answers HTTP 401 `deny_no_user` and an unresolvable host raises
+  ENOTFOUND, and a different pid helps neither. `page_flow.cdp_failure_hint`
+  picks the step by cause (expired credentials, DNS, profile held, timeout)
+  and claims nothing when it does not recognise the error.
+- **CSV cells that a spreadsheet would execute are neutralised.** A cell
+  beginning `=`, `+`, `-`, `@`, tab, CR or LF is prefixed with an apostrophe,
+  in the CSV only; the JSON keeps the site's bytes. Only strings are touched
+  (a negative price stays a number), the escape runs after a list is joined,
+  and the count is recorded as `csv_cells_escaped` in the sidecar, under the
+  caller's own `extra`. Not measured against live Tokopedia rows: it may fire
+  on no current data and is not claimed to.
+- **Output files are written atomically.** `write_json`, `write_csv` and
+  `write_run_meta` opened the destination with `"w"`, which truncates before
+  the first byte, so a crash or full disk mid-write replaced the previous good
+  output (and its sidecar) with a short file. They now write a temp file in
+  the same directory, fsync, and `os.replace`; the destination's mode is kept
+  rather than left at the temp file's 0600.
+
 - **Scraper API: `waitFor` is now sent as a JSON object.** It went out as a
   JSON-encoded string, following a docstring that said the API required one.
   Measured 2026-09-23 against `/tasks/sync`: the string form is refused with

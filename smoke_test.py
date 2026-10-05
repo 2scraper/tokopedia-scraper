@@ -2850,6 +2850,96 @@ def test_x_debug_header_is_redacted():
     return ok
 
 
+def test_writes_are_atomic():
+    """A failed write must leave the previous good file byte-for-byte intact."""
+    import json, os, stat, tempfile
+    import output_writer as ow
+    print("\n[atomic writes]")
+    ok = True
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "out.json")
+        ow.write_json([], path)
+        good = open(path, "rb").read()
+        class Boom:
+            def __iter__(self):
+                raise RuntimeError("disk full")
+        try:
+            ow.write_json(Boom(), path)
+            raised = False
+        except RuntimeError:
+            raised = True
+        ok &= check("a write that fails raises", raised)
+        ok &= check("...and the previous good file is untouched",
+                    open(path, "rb").read() == good)
+        ok &= check("...and no temp file is left beside it",
+                    os.listdir(d) == ["out.json"])
+        mode = stat.S_IMODE(os.stat(path).st_mode)
+        ok &= check("output is not left 0600 by the temp file (mode %o)" % mode,
+                    mode != 0o600 or os.umask(os.umask(0)) & 0o077 == 0o077)
+        meta = ow.write_run_meta(os.path.join(d, "run"), {"status": "complete"})
+        ok &= check("sidecar is written and valid JSON",
+                    json.load(open(meta))["status"] == "complete")
+    return ok
+
+
+def test_cdp_failure_hint_names_the_real_cause():
+    import page_flow
+    print("\n[cdp failure hint]")
+    h = page_flow.cdp_failure_hint
+    ok = True
+    ok &= check("401 deny_no_user -> expired credentials, not pid",
+                "401" in h("HTTP 401 deny_no_user") and "pid" not in h("HTTP 401 deny_no_user"))
+    ok &= check("ENOTFOUND -> DNS, not pid",
+                "resolve" in h("getaddrinfo ENOTFOUND cb.x") and "different pid" not in h("getaddrinfo ENOTFOUND cb.x"))
+    ok &= check("HTTP 500 -> profile held, use another pid",
+                "different pid" in h("unexpected server response: HTTP 500"))
+    ok &= check("unknown cause makes no pid claim", "pid" not in h("weird"))
+    return ok
+
+
+def test_csv_formulas_are_neutralised():
+    """Formula-shaped strings are prefixed in CSV only; numbers are not touched."""
+    import csv, json, os, tempfile
+    from dataclasses import dataclass, field
+    from typing import List, Optional
+    import output_writer as ow
+    print("\n[csv formula neutralisation]")
+
+    @dataclass
+    class Row:
+        sku: str = ""
+        title: str = ""
+        price: Optional[float] = None
+        tags: List[str] = field(default_factory=list)
+
+    ok = True
+    with tempfile.TemporaryDirectory() as d:
+        rows = [Row("1", "=HYPERLINK(\"http://x\")", -5.0, ["@a", "b"]),
+                Row("2", "plain", 10.0, ["c"])]
+        out = os.path.join(d, "o")
+        stats = {}
+        ow.save(rows, out, "both", row_cls=Row, stats=stats)
+        got = list(csv.DictReader(open(out + ".csv", newline="", encoding="utf-8")))
+        ok &= check("a formula-shaped title is prefixed", got[0]["title"].startswith("'="))
+        ok &= check("a list whose first element is formula-shaped is escaped", got[0]["tags"].startswith("'@a"))
+        ok &= check("a negative NUMBER is left alone", got[0]["price"] == "-5.0")
+        ok &= check("an ordinary string is left alone", got[1]["title"] == "plain")
+        ok &= check("JSON keeps the site's bytes",
+                    json.load(open(out + ".json"))[0]["title"].startswith("=HYPERLINK"))
+        ok &= check("count is reported (2 cells)", stats.get("csv_cells_escaped") == 2)
+        prow = [ow.Product(sku="1", title="=SUM(1)")]
+        rc = ow.finish_run(prow, out, "csv", False, blocked=False, stop_reason="completed",
+                           pages_requested=1, pages_completed=1, start_url="u", final_url="u",
+                           extra={"csv_cells_escaped": 99})
+        meta = json.load(open(out + ".meta.json"))
+        ok &= check("caller's extra wins over housekeeping", meta.get("csv_cells_escaped") == 99)
+        ow.finish_run(prow, out, "csv", False, blocked=False, stop_reason="completed",
+                      pages_requested=1, pages_completed=1, start_url="u", final_url="u")
+        ok &= check("sidecar records the escaped-cell count",
+                    json.load(open(out + ".meta.json")).get("csv_cells_escaped") == 1)
+    return ok
+
+
 def test_scraper_api_waitfor_is_an_object():
     """Both Scraper API defects measured 2026-09-23, through the real
     parse_args() and fetch_html(), with requests.post captured (no network).
@@ -2976,6 +3066,9 @@ def main() -> int:
     ok &= test_sample_output()
     ok &= test_x_debug_header_is_redacted()
     ok &= test_scraper_api_waitfor_is_an_object()
+    ok &= test_writes_are_atomic()
+    ok &= test_csv_formulas_are_neutralised()
+    ok &= test_cdp_failure_hint_names_the_real_cause()
 
     print()
     if _failures:
