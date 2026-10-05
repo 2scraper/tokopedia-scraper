@@ -2897,6 +2897,49 @@ def test_cdp_failure_hint_names_the_real_cause():
     return ok
 
 
+def test_csv_formulas_are_neutralised():
+    """Formula-shaped strings are prefixed in CSV only; numbers are not touched."""
+    import csv, json, os, tempfile
+    from dataclasses import dataclass, field
+    from typing import List, Optional
+    import output_writer as ow
+    print("\n[csv formula neutralisation]")
+
+    @dataclass
+    class Row:
+        sku: str = ""
+        title: str = ""
+        price: Optional[float] = None
+        tags: List[str] = field(default_factory=list)
+
+    ok = True
+    with tempfile.TemporaryDirectory() as d:
+        rows = [Row("1", "=HYPERLINK(\"http://x\")", -5.0, ["@a", "b"]),
+                Row("2", "plain", 10.0, ["c"])]
+        out = os.path.join(d, "o")
+        stats = {}
+        ow.save(rows, out, "both", row_cls=Row, stats=stats)
+        got = list(csv.DictReader(open(out + ".csv", newline="", encoding="utf-8")))
+        ok &= check("a formula-shaped title is prefixed", got[0]["title"].startswith("'="))
+        ok &= check("a list whose first element is formula-shaped is escaped", got[0]["tags"].startswith("'@a"))
+        ok &= check("a negative NUMBER is left alone", got[0]["price"] == "-5.0")
+        ok &= check("an ordinary string is left alone", got[1]["title"] == "plain")
+        ok &= check("JSON keeps the site's bytes",
+                    json.load(open(out + ".json"))[0]["title"].startswith("=HYPERLINK"))
+        ok &= check("count is reported (2 cells)", stats.get("csv_cells_escaped") == 2)
+        prow = [ow.Product(sku="1", title="=SUM(1)")]
+        rc = ow.finish_run(prow, out, "csv", False, blocked=False, stop_reason="completed",
+                           pages_requested=1, pages_completed=1, start_url="u", final_url="u",
+                           extra={"csv_cells_escaped": 99})
+        meta = json.load(open(out + ".meta.json"))
+        ok &= check("caller's extra wins over housekeeping", meta.get("csv_cells_escaped") == 99)
+        ow.finish_run(prow, out, "csv", False, blocked=False, stop_reason="completed",
+                      pages_requested=1, pages_completed=1, start_url="u", final_url="u")
+        ok &= check("sidecar records the escaped-cell count",
+                    json.load(open(out + ".meta.json")).get("csv_cells_escaped") == 1)
+    return ok
+
+
 def test_scraper_api_waitfor_is_an_object():
     """Both Scraper API defects measured 2026-09-23, through the real
     parse_args() and fetch_html(), with requests.post captured (no network).
@@ -3024,6 +3067,7 @@ def main() -> int:
     ok &= test_x_debug_header_is_redacted()
     ok &= test_scraper_api_waitfor_is_an_object()
     ok &= test_writes_are_atomic()
+    ok &= test_csv_formulas_are_neutralised()
     ok &= test_cdp_failure_hint_names_the_real_cause()
 
     print()
