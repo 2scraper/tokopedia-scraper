@@ -20,7 +20,52 @@ with it, so nobody discovers it from a bill or from a diff.
 > script of yours passes 0, pass **1**: the flag counts ATTEMPTS, so 1 means
 > "try once and do not retry".
 
+> **Behaviour change:** a page Tokopedia served that never painted a grid, a
+> product or a no-results message, and a page whose tiles parsed to zero
+> rows, now end the run as **exit 5** with `stop_reason`
+> `page_never_painted` / `parser_found_nothing` (exit 6 when earlier pages
+> gave rows). Both used to exit **4**, "empty catalogue". A navigation that
+> answers 403, 429 or 5xx is now classified as blocked (exit 3) in the
+> Playwright and pyppeteer engines, which now read the response status.
+
+> **Behaviour change:** `--pages`, `--concurrency` (below 1), `--delay`,
+> `--retry-delay`, `--proxy-block-retries` (below 0) and, in
+> `scraper_api_client.py`, `--retries`, `--retry-delay` (below 0) and
+> `--timeout` (below 1) are now usage errors (exit 2) naming the flag. They
+> were accepted and either fetched nothing or failed mid-run.
+
+> **Behaviour change:** the canary now fails when it did not test the site:
+> with no `TOKOPEDIA_CDP_ENDPOINT` secret, and on exit 3, 5 or 6. It used to
+> skip or warn and stay green.
+
 ### Fixed
+
+- **The pyppeteer and Selenium engines crashed without `--proxy`.** The first
+  blocked page (both) or failed navigation (pyppeteer) reached
+  `pool.current` / `pool.advance` on a pool that does not exist, an
+  `AttributeError` and exit 1 where 3 or 5 was due. They now re-fetch through
+  the same access path, as the Playwright engine does.
+- **A page could buy more paid solves than its allowance.** The solve before
+  classification was not counted, so a page that stayed a challenge bought
+  one solve per retry (3 against a limit of 1 in Playwright). Both call sites
+  in every engine now claim from one per-page allowance immediately before
+  the purchase, and a retry or proxy rotation does not reset it.
+- **The HTTP status never reached the classifier.** The Playwright and
+  pyppeteer engines now pass the navigation's status; Selenium has none and
+  says so at each call. A 404 or 410 is not treated as a block.
+- **A zero-row page was always read as an empty catalogue** (see above).
+- **The credential scan reported "ok" after scanning nothing** when the clone
+  sat under a directory named `venv`, because its exclusions were tested
+  against the absolute path. They are now relative to the repository, and a
+  scan of 0 files fails.
+- **`--allow-empty` wrote a `"failed"` sidecar** for a completed empty run;
+  it now says `"complete"` with `products: 0`.
+- `.gitignore` now covers the `X.pageN` files `--dump-html X --pages N`
+  writes, and common capture directories (`live/`, `out/`, `runs/`, ...).
+- Removed citations of private instruction files from code comments and the
+  changelog, a stale `--mode shop` docstring, and the claim that a Scraping
+  Browser credential lasts about a day. README now says Selenium sets its
+  Chrome options in code rather than offering them as flags.
 
 - **`--retries 0` fetched nothing and called it a result.** The load loop is
   `range(1, retries + 1)`, so 0 never runs it and the engine judged
@@ -128,9 +173,9 @@ with it, so nobody discovers it from a bill or from a diff.
 
 - **`fingerprint_client.py` could not read the key from `.env`.** `--key`
   defaulted to `os.environ.get("TWOCAPTCHA_KEY")` and only that, so a key put
-  in `.env` — exactly as §3, the README and `.env.example` instruct — worked
+  in `.env` — exactly as the README and `.env.example` instruct — worked
   for every engine and failed HERE with "No API key". A documented mechanism
-  not applied on one path, which is the shape of half the defects §16 lists.
+  not applied on one path.
 
   It now reads through `env_config.env_value`, calling `load_env()` itself
   because this is a standalone entry point that no engine has necessarily run
@@ -142,7 +187,7 @@ with it, so nobody discovers it from a bill or from a diff.
   "still set to the placeholder from .env.example" instead.
 
   Found on a sibling repo's first live `--fingerprint` run, then checked
-  across the family before patching, per §16: five repos had it and one had
+  across the family before patching: five repos had it and one had
   already fixed it. Pinned by a check verified to fail on the old code —
   including that the help string does not interpolate its default, which is
   one substring away from printing a live credential to anyone who types
@@ -166,7 +211,7 @@ with it, so nobody discovers it from a bill or from a diff.
   is to pass it; verified in a live browser both ways and pinned in the
   offline suite.
 
-  Found while auditing a new sibling repo against the family notes. All five
+  Found while auditing a new sibling repo against the family's shared rules. All five
   repos in this family had it.
 
 ---
@@ -220,7 +265,7 @@ argued about.
 
 ## [0.1.1] — 2026-09-10
 
-A pre-publication audit against the family notes, section by section. Five
+A pre-publication audit against the family's shared rules. Five
 defects, all found by checking rather than by reading, all pinned by checks
 now. Two of them made a documented feature not work at all.
 
@@ -334,7 +379,7 @@ consumed the old output, it needs rewriting rather than adjusting:
 ### Four defects the first live runs found
 
 Every one was in new code, every one was invisible to a green offline suite,
-and every one is pinned by a check now. This is §16's rule earning itself:
+and every one is pinned by a check now. The lesson:
 running the code beats reading it, and running EVERY engine beats running the
 primary one.
 

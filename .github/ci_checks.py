@@ -103,7 +103,7 @@ SCANNED_SUFFIXES = (".py", ".md", ".txt", ".yml", ".yaml", ".example")
 # into pip's vendored code and flags a 32-hex string in `_elffile.py` as
 # key-shaped. Correct about the string, wrong about the file — and it is the
 # FIRST thing a new user sees from `python3 smoke_test.py`. A guard people
-# have to argue with is one they learn to suppress (CLAUDE.md §22).
+# have to argue with is one they learn to suppress.
 #
 # Deliberately NOT a narrowing of what gets scanned: an untracked file is
 # still read, because a key pasted into a scratch file beside the scripts is
@@ -114,11 +114,8 @@ _VENV_CACHE = {}
 def _is_in_virtualenv(path):
     """True if any ancestor of `path` (under REPO) is a virtualenv root."""
     for parent in path.parents:
-        try:
-            if parent == REPO.parent:
-                break
-        except Exception:
-            pass
+        if parent == REPO.parent:
+            break
         cached = _VENV_CACHE.get(parent)
         if cached is None:
             cached = (parent / "pyvenv.cfg").is_file()
@@ -134,8 +131,12 @@ def scanned_files():
     for path in sorted(REPO.rglob("*")):
         if not path.is_file() or path.suffix not in SCANNED_SUFFIXES:
             continue
+        # RELATIVE to the repository root, never the absolute path: tested
+        # against `path.parts`, a clone that merely sits under a directory
+        # named `venv` (or `.git`, …) skipped every file, scanned 0 and still
+        # printed "ok".
         if any(part in {".git", "__pycache__", ".venv", "venv"}
-               for part in path.parts):
+               for part in path.relative_to(REPO).parts):
             continue
         if _is_in_virtualenv(path):
             continue
@@ -227,6 +228,11 @@ def secret_check():
                 failed.append(f"{rel}:{lineno} contains {match[:6]}… — a "
                               f"32-char hex string, the shape of a 2captcha key")
 
+    if not scanned:
+        # A scan that read nothing has checked nothing; reporting "ok" for
+        # it is how a misplaced exclusion went unnoticed.
+        failed.append("0 files scanned — the scan excluded the whole "
+                      "repository, so it checked nothing")
     if not failed:
         print(f"ok       {scanned} files scanned, nothing credential-shaped")
     return failed

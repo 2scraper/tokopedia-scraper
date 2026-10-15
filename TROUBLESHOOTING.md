@@ -33,8 +33,8 @@ the 68 products both runs saw.
 - **`--retries`.** That budget is for transient faults. The engines have a
   separate block-retry budget, and on a scored address neither helps.
 - **A datacentre proxy.** A GitHub Actions runner is one, which is why the
-  canary in this repo skips rather than fails when it has no Scraping Browser
-  endpoint.
+  canary in this repo needs a Scraping Browser endpoint, and fails, naming
+  the missing secret, when it has none.
 
 **Read the byte count in the error line.** The engines write the debug dump
 even when it is empty, because "0 bytes" is itself the diagnosis and a reader

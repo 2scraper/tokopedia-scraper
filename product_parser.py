@@ -12,7 +12,7 @@ captures, 2026-09-10: zero `application/ld+json` blocks, zero
 `__NEXT_DATA__`, zero React-flight payload, zero Apollo state. The grid is
 fetched by client-side GraphQL after load and exists only in the rendered
 DOM. So the JSON-LD-first design the rest of this family uses has nothing to
-be first about, and the URL-pattern path §4 calls a *fallback* is promoted to
+be first about, and the URL-pattern path that is elsewhere a *fallback* is promoted to
 primary because there is nothing above it.
 
 A DETAIL page is different: it carries a serialised Apollo cache in an inline
@@ -75,7 +75,7 @@ HOSTS = ("tokopedia.com", "www.tokopedia.com")
 
 # Hosts that look like they belong and do not. Refuse them WITH THE REASON:
 # "is not a Tokopedia site" would be false for a Tokopedia subdomain that
-# simply is not a storefront, and sends the reader hunting for a typo (§5).
+# simply is not a storefront, and sends the reader hunting for a typo.
 UNSUPPORTED: Dict[str, str] = {
     "seller.tokopedia.com": "is Tokopedia's seller dashboard, which requires "
                             "a login and publishes no product pages",
@@ -173,8 +173,8 @@ SELECTORS = {
 }
 
 # How many product links mean "the grid rendered". Must be > 1: waiting for a
-# single match resolves on an unrelated link long before the grid paints
-# (§5). Tokopedia's first batch is 60 tiles, so this is comfortably low.
+# single match resolves on an unrelated link long before the grid paints.
+# Tokopedia's first batch is 60 tiles, so this is comfortably low.
 MIN_CARD_MATCHES = 4
 
 
@@ -196,7 +196,7 @@ _AMOUNT = (r'\d{1,3}(?:[.' + _GROUP_SPACES + r']\d{3})+(?:,\d{1,2})?'
 _PRICE_RE = re.compile(r'Rp\s*(' + _AMOUNT + r')')
 
 # Things that live INSIDE a tile and carry their own number, which is
-# MediaMarkt's instalment line (§4) in a different costume:
+# a sibling site's instalment line in a different costume:
 #
 #   "Hemat s.d  8% Pakai Bonus"   29 of 95 search tiles — a promo, not the
 #                                 discount, and its percentage is not the
@@ -209,7 +209,7 @@ _PROMO_RE = re.compile(r'Hemat\s+s\.?d\.?\s*[\d.,]+\s*%[^0-9]*', re.I)
 _WISHLIST_RE = re.compile(r'Tambah ke Wishlist', re.I)
 # Percentages come out before prices are matched, not after. A rejected match
 # has still consumed the currency symbol, so filtering afterwards loses the
-# real price too (§4).
+# real price too.
 _PCT_RE = re.compile(r'-?\s*\d{1,3}(?:[.,]\d+)?\s*%')
 
 
@@ -358,7 +358,7 @@ _SLUG_TAIL_RE = re.compile(r'-(\d{15,22})$')
 
 # First path segments that are Tokopedia's own routes rather than a shop.
 # A two-segment path under any of these is not a product, and letting one
-# through is how a junk link steals a real product's row (§4).
+# through is how a junk link steals a real product's row.
 _NOT_A_SHOP = frozenset("""
     search p find discovery promo help about register login deals now mall c
     blog career affiliate mitra seller review order cart checkout wishlist
@@ -468,7 +468,7 @@ def paginates_by_url(url: str) -> bool:
     That last part is the dangerous one. A `page_url()` that built `?page=N`
     unconditionally would fetch that empty page, find no new sku, conclude
     the listing was exhausted, and report a COMPLETE run holding page 1 —
-    the silent-single-page failure of §7 arriving by a different route. So
+    the silent single-page failure arriving by a different route. So
     the engines must ask this before they plan page URLs.
     """
     return listing_kind(url) in PAGINATED_KINDS
@@ -536,8 +536,7 @@ def category_from_url(url: str) -> Optional[str]:
 #
 # So detection here is inverted: rather than looking for a marker a block
 # page carries, look for a marker every REAL page carries and treat its
-# absence as the signal. That is §8's `assets.mmsrg.com` trick, and
-# Tokopedia's equivalent is its own asset host — present 3+ times on every
+# absence as the signal. Tokopedia's equivalent is its own asset host — present 3+ times on every
 # one of the six captures, on every page kind, including the empty-result
 # page.
 _ASSET_MARKER = re.compile(r'tokopedia-static\.net|images\.tokopedia\.net', re.I)
@@ -551,7 +550,7 @@ _ASSET_MIN_MATCHES = 2
 # Deliberately NOT included: `cf-turnstile`. The 2Captcha Scraping Browser's
 # auto-solve extension injects a `cf-turnstile` hunter into every page it
 # loads, so the marker appears on perfectly good pages fetched over
-# --cdp-endpoint (§8). Adding it would need the extension-tag filter below
+# --cdp-endpoint. Adding it would need the extension-tag filter below
 # to be exercised, and adding a marker whose only observed source is our own
 # extension is how dead code spreads. The filter is applied anyway, so a
 # future edit that broadens this list is already protected.
@@ -637,7 +636,7 @@ _NO_RESULTS_MARKERS = (
 def detect_bot_challenge(html: str, url: str = "") -> Optional[str]:
     """The name of a challenge vendor found in the markup, or None.
 
-    Broad on purpose (§8): different geos and different scenarios surface
+    Broad on purpose: different geos and different scenarios surface
     different challenges, and a detection is only a warning unless the page
     also has no products on it.
     """
@@ -671,6 +670,9 @@ def is_no_results(html: str) -> bool:
     return any(m.lower() in html.lower() for m in _NO_RESULTS_MARKERS)
 
 
+_NOT_A_REFUSAL = (404, 410)
+
+
 def detect_page_state(html: str, status: Optional[int] = None,
                       url: str = "") -> str:
     """One of "content" · "empty" · "blocked" · "challenge" · "unknown".
@@ -681,10 +683,17 @@ def detect_page_state(html: str, status: Optional[int] = None,
     retry/solve/blocked decision that follows from this verdict lives in
     `page_flow.STATE_POLICY` as data.
     """
-    if status is not None and status != 200:
+    if status is not None and status != 200 and status not in _NOT_A_REFUSAL:
         # A non-200 from this host is a refusal; it has never been observed
         # carrying a page worth parsing.
         return "blocked"
+    # 404 and 410 are NOT read as a refusal. What Tokopedia sends for a
+    # deleted product or a dead listing URL has not been measured, and
+    # calling it "blocked" would send the reader hunting for a proxy problem
+    # for a URL that simply does not exist. Such a page falls through to the
+    # markup checks below; without a grid or a product on it, it ends as
+    # "unknown", which the engines report as content not obtained (exit 5),
+    # never as an empty catalogue.
     if not html or not html.strip():
         return "blocked"
     # THE NO-RESULTS SENTENCE COMES FIRST, before the asset threshold, and
@@ -815,7 +824,7 @@ def _title_of(tile, image_alt: Optional[str]) -> Optional[str]:
     return head or None
 
 
-# Images are the trap on this page, twice over, and both halves are the §10
+# Images are the trap on this page, twice over, and both halves teach one
 # lesson: a column can be 100% populated and entirely wrong.
 #
 # **A tile holds several images and only one of them is the product.** A
@@ -1150,7 +1159,7 @@ def _cache_ref(cache: dict, node, field: str) -> Optional[dict]:
 # 7500 matched the tile's `Rp7.500` exactly, so this is a genuine SECOND view
 # of the price and is what makes `price_source` mean something in this mode.
 #
-# `Rp` is a SYMBOL, not an ISO 4217 code. §4's tier-2 rule is a written code
+# `Rp` is a SYMBOL, not an ISO 4217 code. The tier-2 currency rule is a written code
 # checked against an allowlist of real codes; handing that allowlist the
 # string "Rp" and asking what it thinks is how a size chart becomes a
 # currency. It is mapped through a symbol table instead.
@@ -1222,7 +1231,7 @@ def _detail_title(soup, shop_name: Optional[str]) -> Optional[str]:
 # Split on the shop name we already have from the Apollo cache rather than on
 # position, so a product name containing " - " cannot shift the answer, and
 # return None unless the shape is exactly right. A guessed city is worse than
-# no city (§8).
+# no city.
 def _detail_shop_location(soup, shop_name: Optional[str]) -> Optional[str]:
     if not shop_name or soup.title is None:
         return None
@@ -1254,7 +1263,7 @@ def parse_product_page(html: str, url: str,
     currency = _SYMBOL_TO_ISO.get((raw_currency or "").strip().lower())
     if price is not None and currency is None:
         # The page stated a price without a currency this table knows. Never
-        # default it (§8): say nothing rather than claim IDR.
+        # default it: say nothing rather than claim IDR.
         logger.warning("unrecognised currency %r on %s — leaving it null",
                        raw_currency, url)
 
@@ -1291,7 +1300,7 @@ def parse_product_page(html: str, url: str,
         price=price,
         currency=currency if price is not None else None,
         # A detail page carries no strikethrough of its own, and the "similar
-        # products" carousel's prices belong to other products (§4). Null
+        # products" carousel's prices belong to other products. Null
         # rather than a neighbour's number.
         original_price=None,
         discount_pct=None,

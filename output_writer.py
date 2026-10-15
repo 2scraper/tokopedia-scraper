@@ -450,12 +450,9 @@ def run_meta(status: str, stop_reason: str, pages_requested: int,
     because consumers read these columns by name across the family.
 
     `extra` carries facts about the run that are not about any single row.
-    `--mode shop` uses it for the SELLER's own name, location, rating and
-    review count: a run covers exactly one shop, so those belong to the run
-    rather than repeated down a column, and the shop's review count (16679
-    on the captured seller) is a different number from its listings' own
-    (827 on one of them) — putting them in one column would make the schema
-    lie.
+    `--mode product` uses it for the seller's own id, name and slug, and
+    `--mode listing` for the scroll trace and the page's result header: each
+    describes the run rather than a row, so it is not repeated down a column.
 
     `pages_failed` lists the pages that did not yield data, by number.
     `pages_completed` alone was enough only while pages were fetched strictly
@@ -589,8 +586,15 @@ def finish_run(rows: Sequence[Any], out_prefix: str, fmt: str,
         if write_stats:
             # UNDER the caller's extra: housekeeping must never drop site data.
             extra = {**write_stats, **(extra or {})}
-        status = "complete" if (rows and complete) else (
-            "partial" if rows else "failed")
+        # A zero-row run reaches here only under --allow-empty. When it
+        # completed and nothing blocked it, that empty answer IS the result
+        # the caller asked to keep, so the sidecar says "complete" (with
+        # products: 0) rather than "failed", which would contradict the
+        # output file written beside it.
+        if rows:
+            status = "complete" if complete else "partial"
+        else:
+            status = "complete" if (complete and not blocked) else "failed"
         write_run_meta(out_prefix, run_meta(
             status=status, stop_reason=stop_reason,
             pages_requested=pages_requested, pages_completed=pages_completed,

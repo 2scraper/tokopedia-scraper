@@ -95,15 +95,12 @@ history needs a decision, not a red check on every push.
 
 Then the rest of the presentation, in the order that matters:
 
-1. `python3 smoke_test.py` green, and the canary dispatched at least once —
-   including its SKIP branch, which is what runs when the
-   `TOKOPEDIA_CDP_ENDPOINT` secret is absent. The canary has **no schedule**: a
-   Scraping Browser credential on this account does not survive a day, so it
-   runs on demand with a fresh secret rather than painting a badge that has
-   tested nothing. Put a schedule back the day a long-lived credential
-   exists.
-2. The repo description, homepage and topics set (see the family notes on
-   what those should say).
+1. `python3 smoke_test.py` green, and the canary dispatched at least once
+   with the `TOKOPEDIA_CDP_ENDPOINT` secret set and ending green. Without the
+   secret the canary fails and says so; that red is not a pass. The canary
+   has **no schedule** yet: add one once the secret exists.
+2. The repo description, homepage and topics set (name the engines, the data kinds
+   and the products a run can use).
 3. Only then the row in the org profile README — and check it with an
    ANONYMOUS request rather than your own logged-in browser. A row pointing
    at a private repo is a 404 for every visitor, which costs more trust than
