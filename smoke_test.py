@@ -43,7 +43,7 @@ rating, sold count and title for named products.
 The only thing changed inside a fixture is the CDN's expiring image signature
 (`?lk3s=…&x-expires=…&x-signature=…`), replaced with `?SIGNATURE-SCRUBBED`.
 It identifies no person and no session, but it is per-impression material a
-fresh capture brings with it, and §10's rule is to scrub before committing
+fresh capture brings with it, and the rule is to scrub before committing
 rather than to argue about which material is harmless. `image_url` is
 therefore asserted by SHAPE, and every other field byte-for-byte.
 `test_no_capture_leaks` guards the next capture with PATTERNS rather than
@@ -390,7 +390,7 @@ def test_listing_values():
     ok &= check("...no was-price", single.original_price is None)
     ok &= check("...and no discount, not a zero", single.discount_pct is None)
 
-    # THE CANARY ASSERTION §4 asks for, and it costs one line: no row may
+    # THE CANARY ASSERTION, and it costs one line: no row may
     # carry a was-price at or below its price. That is what a second KIND of
     # struck-through price (an EU Omnibus 30-day low, say) would produce.
     ok &= check("no row has an original_price at or below its price",
@@ -510,7 +510,7 @@ def test_product_detail():
 
     ok &= check("the price comes from product:price:amount (7500)",
                 row.price == 7500.0)
-    # "Rp" is a SYMBOL, not an ISO 4217 code. §4's tier-2 rule is a written
+    # "Rp" is a SYMBOL, not an ISO 4217 code. The tier-2 currency rule is a written
     # code checked against an allowlist of real codes; this goes through a
     # symbol table instead.
     ok &= check("its currency maps Rp -> IDR", row.currency == "IDR")
@@ -611,7 +611,7 @@ def test_urls():
 
     # A junk two-segment path under one of the site's own routes must not
     # read as a product: that is how a sizing guide or a promo card steals a
-    # real product's row (§4).
+    # real product's row.
     for junk in ["/search/kopi", "/p/makanan-minuman", "/promo/harbolnas",
                  "/help/article", "/about/us", "/discovery/x"]:
         ok &= check("%s is not a product path" % junk,
@@ -998,7 +998,7 @@ def test_page_flow():
                 page_flow.content_timeout_ms("listing") > 0
                 and page_flow.content_timeout_ms("product") > 0)
 
-    # THE SCROLL, driven with the browser stubbed out. §8's rule: scroll to
+    # THE SCROLL, driven with the browser stubbed out. The rule: scroll to
     # document.body.scrollHeight, and require the count AND the height to
     # hold still for THREE rounds — one is not enough, because the next batch
     # takes longer to arrive than a single pause.
@@ -1091,7 +1091,7 @@ def test_page_flow():
         ok &= check("no page_flow string literal contains %r" % js,
                     not [s for s in literals if js in s])
 
-    # Pagination markup entries are ordered most-durable first (§5):
+    # Pagination markup entries are ordered most-durable first:
     # standards-based signals before build artefacts.
     sel = page_flow.NEXT_PAGE_SELECTOR
     ok &= check("the pagination selectors lead with link[rel=next]",
@@ -1165,7 +1165,7 @@ def test_output_contract():
                  "category_url"])
     ok &= check("both modes map to a row class, and there is no shop mode",
                 ROW_CLASS_BY_MODE == {"listing": Product, "product": Product})
-    # A column that is null on every row of every run should not exist (§9).
+    # A column that is null on every row of every run should not exist.
     # These four are null on every LISTING row and populated in --mode
     # product, which is a different thing and is why they are kept — pinned
     # so that removing them needs a measurement rather than a hunch.
@@ -1425,46 +1425,25 @@ def test_pyppeteer_teardown_noise():
     return ok
 
 
-def test_canary_separates_access_from_defect():
-    group("the canary fails on defects and only WARNS on access conditions")
+def test_canary_requires_a_real_test():
+    group("the canary passes only when it really tested the site")
     ok = True
     wf_path = os.path.join(REPO_ROOT, ".github", "workflows", "canary.yml")
     wf = open(wf_path, encoding="utf-8").read()
 
-    # The data checks must not run on a blocked or refused run: there is no
-    # output file, and a missing file would fail for the wrong reason.
+    # The data checks run only on a run that got in; every other outcome
+    # has already failed the job with its own message.
     ok &= check("the data checks are gated on the run having got in",
                 "steps.verdict.outputs.tested == 'true'" in wf)
 
-    # Extract the real interpret-the-exit-code script and run it under bash
-    # for every code, rather than asserting on the YAML text. What matters is
-    # whether the JOB FAILS, and only running it answers that.
-    try:
-        start = wf.index('          set -e\n          code=')
-        end = wf.index('          echo "tested=$tested" >> "$GITHUB_OUTPUT"')
-        end += len('          echo "tested=$tested" >> "$GITHUB_OUTPUT"')
-    except ValueError:
-        return check("the canary's exit-code script could be located", False)
-    script = "\n".join(line[10:] if line.startswith(" " * 10) else line
-                        for line in wf[start:end].splitlines())
-
-    # WHY EACH CODE LANDS WHERE IT DOES:
-    #   0  got in and parsed         -> pass, and the assertions then run
-    #   3  blocked before parsing    -> ACCESS. Measured intermittent per
-    #      profile on this site, so a daily red badge would be noise.
-    #   5  endpoint refused          -> ACCESS, and the commonest cause is an
-    #      EXPIRED SECRET. A credential is not forever; failing on it paints
-    #      the badge red every day until someone notices.
-    #   6  partial                   -> ACCESS, usually a mid-run block.
-    #   1  crashed                   -> DEFECT.
-    #   2  bad arguments             -> DEFECT (in the workflow itself).
-    #   4  served a page, ZERO rows  -> DEFECT, and precisely the regression
-    #      this canary exists to catch: the tile anchor moved.
-    expected = {0: "pass", 3: "warn", 5: "warn", 6: "warn",
-                1: "fail", 2: "fail", 4: "fail", 99: "fail"}
-    for code, want in sorted(expected.items()):
-        body = script.replace('code="${{ steps.run.outputs.exit_code }}"',
-                              'code="%d"' % code)
+    def run_block(begin, finish, env=None):
+        try:
+            start = wf.index(begin)
+            end = wf.index(finish, start) + len(finish)
+        except ValueError:
+            return None
+        body = "\n".join(line[10:] if line.startswith(" " * 10) else line
+                         for line in wf[start:end].splitlines())
         with tempfile.TemporaryDirectory() as td:
             out_file = os.path.join(td, "gh_output")
             summary = os.path.join(td, "gh_summary")
@@ -1473,38 +1452,78 @@ def test_canary_separates_access_from_defect():
             done = subprocess.run(
                 ["bash", "-c", body], capture_output=True, text=True,
                 env=dict(os.environ, GITHUB_OUTPUT=out_file,
-                         GITHUB_STEP_SUMMARY=summary))
-            failed = done.returncode != 0
-            warned = "::warning::" in done.stdout
-            errored = "::error::" in done.stdout
-            wrote_summary = bool(open(summary, encoding="utf-8").read().strip())
-            tested = "tested=true" in open(out_file, encoding="utf-8").read()
+                         GITHUB_STEP_SUMMARY=summary, **(env or {})))
+            return (done.returncode, done.stdout,
+                    open(out_file, encoding="utf-8").read(),
+                    open(summary, encoding="utf-8").read())
 
-        if want == "pass":
-            got = not failed and not warned and not errored and tested
-        elif want == "warn":
-            # A warning must NOT read as a pass: it also has to say in the
-            # step summary that nothing was actually tested, and it must not
-            # claim `tested`.
-            got = not failed and warned and wrote_summary and not tested
+    # Extract the real interpret-the-exit-code script and run it under bash
+    # for every code, rather than asserting on the YAML text. What matters is
+    # whether the JOB FAILS, and only running it answers that.
+    #
+    # ONLY 0 PASSES. A blocked run (3), a run that obtained nothing (5) and
+    # a partial run (6) did not test the site end to end, and a canary that
+    # did not test the site must not end green; it used to pass all three
+    # with a warning. 1, 2 and 4 were always failures.
+    for code in (0, 1, 2, 3, 4, 5, 6, 99):
+        res = None
+        try:
+            start = wf.index('          set -e\n          code=')
+            end = wf.index('          echo "tested=$tested" >> "$GITHUB_OUTPUT"')
+            end += len('          echo "tested=$tested" >> "$GITHUB_OUTPUT"')
+            body = "\n".join(line[10:] if line.startswith(" " * 10) else line
+                             for line in wf[start:end].splitlines())
+            body = body.replace('code="${{ steps.run.outputs.exit_code }}"',
+                                'code="%d"' % code)
+            with tempfile.TemporaryDirectory() as td:
+                out_file = os.path.join(td, "gh_output")
+                summary = os.path.join(td, "gh_summary")
+                open(out_file, "w").close()
+                open(summary, "w").close()
+                done = subprocess.run(
+                    ["bash", "-c", body], capture_output=True, text=True,
+                    env=dict(os.environ, GITHUB_OUTPUT=out_file,
+                             GITHUB_STEP_SUMMARY=summary))
+                res = (done.returncode, done.stdout,
+                       open(out_file, encoding="utf-8").read())
+        except ValueError:
+            pass
+        if res is None:
+            ok &= check("the canary's exit-code script could be located", False)
+            break
+        rc, stdout, output = res
+        if code == 0:
+            got = rc == 0 and "::error::" not in stdout and "tested=true" in output
+            want = "pass"
         else:
-            got = failed and errored
+            got = rc != 0 and "::error::" in stdout and "tested=true" not in output
+            want = "fail"
         ok &= check("exit %-2d is treated as %s" % (code, want), got)
 
-    ok &= check("the reason access is not a defect is written down",
-                "ACCESS CONDITIONS ARE NOT DEFECTS" in wf)
+    # A MISSING SECRET FAILS THE JOB, naming the secret. It used to skip and
+    # go green, and the only canary run this repo ever had was that skip.
+    res = run_block("          echo \"::error::The TOKOPEDIA_CDP_ENDPOINT",
+                    "          exit 1")
+    ok &= check("a missing TOKOPEDIA_CDP_ENDPOINT fails the job with an "
+                "::error:: naming it",
+                res is not None and res[0] != 0 and "::error::" in res[1]
+                and "TOKOPEDIA_CDP_ENDPOINT" in res[1])
+    ok &= check("the secret check runs exactly when the secret is absent",
+                "if: env.HAVE_CDP != 'true'" in wf
+                and "Explain a skipped run" not in wf
+                and "::notice::Skipping" not in wf)
+    # The secret reaches the scraper through the step's env, not argv.
+    ok &= check("the secret is mapped into the live step's env",
+                "TOKOPEDIA_CDP_ENDPOINT: ${{ secrets.TOKOPEDIA_CDP_ENDPOINT }}"
+                in wf)
 
-    # NO SCHEDULE, and the reason has to travel with the decision. A daily
-    # cron against a credential that does not survive a day gives either a
-    # permanently red badge or a permanently green one that tested nothing —
-    # and the green is worse, because it reads as "the parser still works".
-    # Restoring the cron is a legitimate change the day a long-lived
-    # credential exists; this check makes it a decision rather than a habit.
-    ok &= check("the canary has no cron schedule",
-                not re.search(r"^\s*-\s*cron:", wf, re.M))
+    # The schedule stays off until the secret exists, and says so; the
+    # retracted "an endpoint does not survive a day" claim is not the reason.
     ok &= check("it is dispatchable by hand", "workflow_dispatch:" in wf)
-    ok &= check("and the reason the schedule is off is written down",
-                "does not survive a day" in wf)
+    ok &= check("the schedule decision is written down without the retracted "
+                "credential-lifetime claim",
+                "survive a day" not in wf
+                and "once TOKOPEDIA_CDP_ENDPOINT exists, add a" in wf)
     ok &= check("the expired-secret case is named",
                 "expired" in wf.lower() and "refresh" in wf.lower())
     return ok
@@ -1576,6 +1595,38 @@ def test_ci_checks_is_actually_wired_up():
         if os.path.exists(planted):
             os.remove(planted)
     ok &= check("the probe file is cleaned up", not os.path.exists(planted))
+
+    # WHERE THE CLONE LIVES MUST NOT MATTER. Exclusions were tested against
+    # the ABSOLUTE path, so a clone under any directory named `venv` skipped
+    # every file, scanned 0 and printed "ok". Run a copy of the script from
+    # clones under such parents, with a planted key, and require the key.
+    import shutil as _shutil
+    for parent in ("venv", ".venv", "__pycache__", "plain"):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = os.path.join(tmp, parent, "clone")
+            os.makedirs(os.path.join(repo, ".github"))
+            _shutil.copy(script, os.path.join(repo, ".github", "ci_checks.py"))
+            with open(os.path.join(repo, "probe.py"), "w",
+                      encoding="utf-8") as f:
+                f.write('KEY = "%s"\n' % planted_key)
+            caught = subprocess.run(
+                [sys.executable, os.path.join(repo, ".github", "ci_checks.py"),
+                 "--secret-check"], cwd=repo, capture_output=True, text=True)
+            ok &= check("a clone under %s/ still finds the planted key"
+                        % parent, caught.returncode != 0
+                        and "probe.py:1" in caught.stdout + caught.stderr)
+
+    # And a scan that read NOTHING is a failure, never "ok".
+    import importlib.util as _ilu
+    spec = _ilu.spec_from_file_location("_ci_checks_probe", script)
+    ci = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(ci)
+    with tempfile.TemporaryDirectory() as tmp:
+        ci.REPO = __import__("pathlib").Path(tmp)
+        with redirect_stdout(io.StringIO()):
+            empty = ci.secret_check()
+    ok &= check("a secret scan of 0 files fails rather than reporting ok",
+                bool(empty) and "0 files scanned" in empty[0])
 
     # The pre-publication scan: the same rules over every blob that has EVER
     # existed. A later commit cannot remove what a published tag and a merged
@@ -1729,10 +1780,9 @@ def test_fingerprint_client_reads_env():
     # THE DEFECT THIS PINS, found the first time --fingerprint was run live
     # here and confirmed present in five sibling repos: `--key` defaulted to
     # `os.environ.get("TWOCAPTCHA_KEY")` alone. So a key put in `.env` —
-    # which is exactly what §3, the README and .env.example instruct — worked
+    # which is exactly what the README and .env.example instruct — worked
     # for every engine and failed HERE with "No API key". A documented
-    # mechanism not applied on one path, which is the shape of half the
-    # defects §16 lists.
+    # mechanism not applied on one path.
     src = inspect.getsource(fpc.main)
     ok &= check("it loads .env itself, rather than hoping an engine did",
                 "env_config.load_env()" in src)
@@ -1796,7 +1846,7 @@ def test_fingerprint_application():
     # possible, but it is not what this fingerprint describes, and a locale
     # that contradicts the rest of the identity is the mismatch again. This
     # was one of the six defects a sibling repo inherited from copied core
-    # and never ran (§16).
+    # and never ran.
     ok &= check("the locale is the fingerprint's own, not en-<country>",
                 kw.get("locale") == "id-ID")
     ok &= check("the timezone is carried, so the browser cannot contradict it",
@@ -2258,7 +2308,7 @@ def test_env_config():
     # CONFIGURED, so `cp .env.example .env` and a run connected to
     # cb.2captcha.com with the string `{login}-zone-…` as its username and
     # got a 401 — a confusing failure a long way from its cause, which is
-    # what §3's rule exists to prevent.
+    # what this check exists to prevent.
     for raw in ('ws://{login}-zone-scraping_browser-country-id-pid-'
                 '{profileId}:{password}@cb.2captcha.com:9222',
                 'http://{user}:{password}@ap.proxy.2captcha.com:2334',
@@ -2425,7 +2475,7 @@ def test_proxy_pool():
     # was written to show. Every caller here passes the URL as its own `%s`
     # argument for that reason, and `_mask_credentials()` is what handles
     # arbitrary text. Asserting the CURRENT behaviour makes a future swap a
-    # failing check rather than an unreadable log (§10).
+    # failing check rather than an unreadable log.
     sentence = "a http://u:supersecret@h.example:8080 b"
     ok &= check("mask() on a sentence loses the host — the documented limit",
                 mask(sentence) == "?://?")
@@ -2545,7 +2595,7 @@ def test_engines(skips):
 
     # THE FLAG CONTRACT, and the exact ways the engines differ from it.
     #
-    # §9 lists the flags every engine must offer. Checked rather than
+    # The family's flag contract lists the flags every engine must offer. Checked rather than
     # trusted, because a flag one engine has and another does not is the
     # drift page_flow.py and finish_run() exist to prevent, one level up —
     # and because the README documents these differences by name, so a new
@@ -2585,7 +2635,7 @@ def test_engines(skips):
     # `--fp-tags` MUST DEFAULT TO ONE OS-FAMILY TAG. It shipped in this
     # family as "Windows,Chrome,Desktop", which the fingerprint API rejects
     # with HTTP 400 — so --fingerprint failed on every invocation, which is
-    # one of the six defects §16 of the family notes lists. Measured
+    # one of six defects a sibling inherited from copied code. Measured
     # 2026-09-10 against the live API: `Windows` succeeds;
     # `Windows,Chrome,Desktop`, `Chrome` and `Desktop` each 400.
     for name in _ENGINE_MODULES:
@@ -2998,7 +3048,7 @@ def test_parse_is_gated_on_the_policy():
     # engine parsed whatever reached the parse line, so the `parse` column
     # of STATE_POLICY decided nothing and an engine could disagree with the
     # table — and with its twins — without anything noticing. That is the
-    # defect CLAUDE.md §17 names for constants, with a function instead.
+    # same defect as a constant nothing reads, with a function instead.
     #
     # Measured across the family on 2026-09-23 by counting definitions
     # against readers: 7 of 24 repos defined it and none called it.
@@ -3083,6 +3133,464 @@ def test_retries_is_validated_in_every_entry_point():
     return check("--retries is validated in every entry point, so 0 is a usage error", not problems)
 
 
+# ---------------------------------------------------------------------------
+# The engines' fetch loop, DRIVEN rather than read
+# ---------------------------------------------------------------------------
+# Each engine's real `_fetch_one_page` is run against a fake session. The
+# driver library is replaced by a stub module only when it is not installed,
+# so these checks run in the core-only job too: they exercise this repo's
+# retry, rotation, solve and classification logic, never a browser.
+_DRIVER_OF = {"playwright_scraper": "playwright",
+              "puppeteer_scraper": "pyppeteer",
+              "selenium_scraper": "selenium"}
+
+
+def _driver_stub_modules(lib):
+    import types as _t
+
+    def mod(name, **attrs):
+        m = _t.ModuleType(name)
+        m.__dict__.update(attrs)
+        return m
+
+    def exc(name):
+        return type(name, (Exception,), {})
+
+    if lib == "playwright":
+        return {"playwright": mod("playwright"),
+                "playwright.sync_api": mod(
+                    "playwright.sync_api", sync_playwright=lambda: None,
+                    Error=exc("Error"), TimeoutError=exc("TimeoutError"))}
+    if lib == "pyppeteer":
+        return {"pyppeteer": mod("pyppeteer", launch=None, connect=None)}
+    wde = exc("WebDriverException")
+    return {
+        "selenium": mod("selenium", webdriver=mod("selenium.webdriver")),
+        "selenium.webdriver": mod("selenium.webdriver"),
+        "selenium.common": mod("selenium.common"),
+        "selenium.common.exceptions": mod(
+            "selenium.common.exceptions", WebDriverException=wde,
+            TimeoutException=type("TimeoutException", (wde,), {}),
+            JavascriptException=type("JavascriptException", (wde,), {})),
+        "selenium.webdriver.chrome": mod("selenium.webdriver.chrome"),
+        "selenium.webdriver.chrome.options": mod(
+            "selenium.webdriver.chrome.options", Options=object),
+        "selenium.webdriver.common": mod("selenium.webdriver.common"),
+        "selenium.webdriver.common.by": mod(
+            "selenium.webdriver.common.by",
+            By=type("By", (), {"CSS_SELECTOR": "css selector"})),
+        "selenium.webdriver.support": mod("selenium.webdriver.support"),
+        "selenium.webdriver.support.ui": mod(
+            "selenium.webdriver.support.ui", WebDriverWait=object),
+    }
+
+
+def _load_engine_for_probe(name):
+    """A private copy of engine `name`, importable with no driver installed."""
+    import importlib.util as _ilu
+    import types as _t
+    lib = _DRIVER_OF[name]
+    try:
+        __import__(lib)
+        stubs = {}
+    except ImportError:
+        stubs = _driver_stub_modules(lib)
+    saved = {k: sys.modules.get(k) for k in stubs}
+    sys.modules.update(stubs)
+    try:
+        spec = _ilu.spec_from_file_location(
+            "_fetch_probe_" + name, os.path.join(REPO_ROOT, name + ".py"))
+        engine = _ilu.module_from_spec(spec)
+        spec.loader.exec_module(engine)
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                sys.modules.pop(k, None)
+            else:
+                sys.modules[k] = v
+    # No real waiting: every pause in the loop goes through `time.sleep`.
+    engine.time = _t.SimpleNamespace(sleep=lambda s: None)
+    return engine
+
+
+class _ProbePage:
+    """Enough of a page for every driver dialect the engines speak."""
+
+    def __init__(self, html, status=200, fail=None, url=SEARCH_URL):
+        self.html, self.status, self.fail, self.url = html, status, fail, url
+        self.gotos = 0
+
+    # navigation (Playwright: goto(url, **kw); pyppeteer: goto(url, opts);
+    # Selenium: get(url))
+    def goto(self, url, *a, **kw):
+        self.gotos += 1
+        if self.fail is not None:
+            raise self.fail
+        self.url = url
+        import types as _t
+        return _t.SimpleNamespace(status=self.status)
+
+    def get(self, url):
+        self.goto(url)
+
+    # content
+    def content(self):
+        return self.html
+
+    @property
+    def page_source(self):
+        return self.html
+
+    @property
+    def current_url(self):
+        return self.url
+
+    # counting
+    def query_selector_all(self, selector):
+        return []
+
+    def querySelectorAll(self, selector):
+        return []
+
+    def find_elements(self, by, selector):
+        return []
+
+    # everything else is a no-op
+    def evaluate(self, *a, **kw):
+        return None
+
+    def execute_script(self, *a, **kw):
+        return None
+
+    def wait_for_timeout(self, ms):
+        return None
+
+    def reload(self, *a, **kw):
+        return None
+
+    def refresh(self):
+        return None
+
+    def screenshot(self, *a, **kw):
+        return None
+
+    def save_screenshot(self, *a, **kw):
+        return None
+
+
+class _ProbeSession:
+    def __init__(self, page):
+        import types as _t
+        self.page = self.driver = page
+        self.bridge = _t.SimpleNamespace(run=lambda x: x)
+        self.relaunches = 0
+
+    def relaunch(self):
+        self.relaunches += 1
+        return self
+
+
+def _probe_args(out, mode="listing", **over):
+    import types as _t
+    a = _t.SimpleNamespace(
+        url=SEARCH_URL, mode=mode, pages=1, retries=1, retry_delay=0.0,
+        delay=0.0, proxy_block_retries=2, out=out, dump_html=None,
+        twocaptcha_key="stub-never-sent", captcha_api="v2", min_score=0.7,
+        solve_captcha="always", category=None, format="json",
+        allow_empty=False)
+    a.__dict__.update(over)
+    return a
+
+
+def _probe_fetch(engine, html, state=None, pool=None, status=200, fail=None,
+                 mode="listing", purchases=None, seen_status=None, **args_over):
+    """Run engine._fetch_one_page once. Returns (outcome, error, session)."""
+    real_classify = page_flow.classify
+
+    def classify(h, status=None, url=""):
+        if seen_status is not None:
+            seen_status.append(status)
+        return state if state is not None else real_classify(h, status=status,
+                                                             url=url)
+
+    import types as _t
+    challenge = _t.SimpleNamespace(kind="recaptcha_v2", source="html",
+                                   sitekey="probe-sitekey", action=None)
+    patched = {
+        "detect_recaptcha_v3": lambda *a, **k: challenge,
+        "detect_recaptcha_in_page": lambda *a, **k: None,
+        "reconcile_detections": lambda a, b: a or b,
+        "solve_recaptcha": lambda *a, **k: (purchases.append(1)
+                                            if purchases is not None
+                                            else None) or "probe-token",
+    }
+    saved = {k: getattr(engine, k) for k in patched}
+    for k, v in patched.items():
+        setattr(engine, k, v)
+    page_flow.classify = classify
+    page = _ProbePage(html, status=status, fail=fail)
+    session = _ProbeSession(page)
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            args = _probe_args(os.path.join(d, "probe"), mode=mode, **args_over)
+            try:
+                with redirect_stdout(io.StringIO()):
+                    outcome = engine._fetch_one_page(session, args, pool, 1,
+                                                     args.url)
+                return outcome, None, session
+            except Exception as e:  # noqa: BLE001 — the check reports it
+                return None, e, session
+    finally:
+        page_flow.classify = real_classify
+        for k, v in saved.items():
+            setattr(engine, k, v)
+
+
+def test_engine_fetch_loop_is_driven():
+    group("each engine's fetch loop, driven with a fake session")
+    import logging as _logging
+    ok = True
+    served = page("<div>served, no grid yet</div>")
+    _logging.disable(_logging.CRITICAL)
+    try:
+        for name in _ENGINE_MODULES:
+            try:
+                engine = _load_engine_for_probe(name)
+            except Exception as e:  # noqa: BLE001
+                ok &= check("%s loads for the probe (%s)" % (name, e), False)
+                continue
+            load_error = (engine.PWTimeout("probe timeout")
+                          if name == "playwright_scraper" else
+                          engine.TimeoutException("probe timeout")
+                          if name == "selenium_scraper" else
+                          RuntimeError("probe timeout"))
+
+            # 1. No proxy pool: a block and a load failure are outcomes, not
+            #    an AttributeError on `pool.current` / `pool.advance` (exit 1).
+            out, err, _ = _probe_fetch(engine, "", state="blocked", pool=None)
+            ok &= check("%s: a blocked page with no --proxy is an outcome, "
+                        "not a crash (%r)" % (name, err),
+                        err is None and out is not None
+                        and out.blocked_by is not None)
+            out, err, sess = _probe_fetch(engine, "", pool=None,
+                                          fail=load_error)
+            ok &= check("%s: a load failure with no --proxy is an outcome, "
+                        "not a crash (%r)" % (name, err),
+                        err is None and out is not None and out.load_failed
+                        and sess.relaunches == 0)
+
+            # 2. One solve allowance per page, across BOTH call sites and
+            #    every retry and rotation, with and without a pool.
+            for label, pool in (("no pool", None),
+                                ("3-exit pool", ProxyPool(
+                                    ["http://h1:1", "http://h2:2",
+                                     "http://h3:3"]))):
+                bought = []
+                out, err, sess = _probe_fetch(engine, served,
+                                              state="challenge", pool=pool,
+                                              purchases=bought)
+                ok &= check("%s, %s: a page that stays a challenge buys %d "
+                            "solve(s), not one per retry (bought %d, %r)"
+                            % (name, label, page_flow.SOLVES_PER_PAGE,
+                               len(bought), err),
+                            err is None
+                            and len(bought) == page_flow.SOLVES_PER_PAGE)
+
+            # 3. The HTTP status reaches the classifier where the driver has
+            #    one. Selenium (WebDriver) has none and says so by name.
+            seen = []
+            out, err, _ = _probe_fetch(engine, served, status=403,
+                                       seen_status=seen)
+            if name == "selenium_scraper":
+                ok &= check("%s: classified by markup alone (no status to "
+                            "pass)" % name, err is None and seen
+                            and set(seen) == {None})
+            else:
+                ok &= check("%s: the navigation's 403 reaches the classifier "
+                            "and the page is blocked (saw %s, %r)"
+                            % (name, sorted(set(map(str, seen))), err),
+                            err is None and 403 in seen and out is not None
+                            and out.blocked_by is not None)
+
+            # 4. A zero-row page is an empty catalogue only when the site
+            #    said so.
+            out, err, _ = _probe_fetch(engine, served, state="unknown")
+            ok &= check("%s: a page that never painted is NOT ok and says "
+                        "page_never_painted (%r)" % (name, err),
+                        err is None and out is not None and not out.ok
+                        and out.stop_reason == "page_never_painted")
+            out, err, _ = _probe_fetch(engine, served, state="content")
+            ok &= check("%s: a content page that parses to zero rows is "
+                        "parser_found_nothing, not empty (%r)" % (name, err),
+                        err is None and out is not None and not out.ok
+                        and out.stop_reason == "parser_found_nothing")
+            out, err, _ = _probe_fetch(engine, served, state="empty")
+            ok &= check("%s: a genuinely empty page is still ok (%r)"
+                        % (name, err),
+                        err is None and out is not None and out.ok
+                        and out.stop_reason == "completed")
+    finally:
+        _logging.disable(_logging.NOTSET)
+
+    # The exit codes those outcomes produce, through the shared finish_run.
+    with tempfile.TemporaryDirectory() as d:
+        prefix = os.path.join(d, "probe")
+        for reason in ("page_never_painted", "parser_found_nothing"):
+            with redirect_stdout(io.StringIO()):
+                rc_none = finish_run([], prefix, "json", False, blocked=False,
+                                     stop_reason=reason, pages_requested=1,
+                                     pages_completed=0, start_url=SEARCH_URL,
+                                     final_url=SEARCH_URL, pages_failed=[1])
+                rc_rows = finish_run([Product(sku="1", url="u1")], prefix,
+                                     "json", False, blocked=False,
+                                     stop_reason=reason, pages_requested=2,
+                                     pages_completed=1, start_url=SEARCH_URL,
+                                     final_url=SEARCH_URL, pages_failed=[2])
+            ok &= check("%s: no rows -> exit 5, rows -> exit 6 (got %s, %s)"
+                        % (reason, rc_none, rc_rows),
+                        rc_none == 5 and rc_rows == EXIT_PARTIAL)
+        # --allow-empty on a completed empty run: the file written is the
+        # answer, so the sidecar beside it must not say "failed".
+        with redirect_stdout(io.StringIO()):
+            rc = finish_run([], prefix, "json", True, blocked=False,
+                            stop_reason="completed", pages_requested=1,
+                            pages_completed=1, start_url=SEARCH_URL,
+                            final_url=SEARCH_URL)
+        meta = json.load(open(prefix + ".meta.json", encoding="utf-8"))
+        ok &= check("--allow-empty, completed, 0 rows: exit 4 and a "
+                    "'complete' sidecar (got %s, %r)" % (rc, meta.get("status")),
+                    rc == EXIT_NO_PRODUCTS and meta.get("status") == "complete"
+                    and meta.get("products") == 0)
+    return ok
+
+
+def test_status_reaches_every_classify_call():
+    group("every classify call in every engine passes a status")
+    ok = True
+    for name in _ENGINE_MODULES:
+        tree = ast.parse(open(os.path.join(REPO_ROOT, name + ".py"),
+                              encoding="utf-8").read())
+        bad, seen = [], 0
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            fn = node.func
+            callee = (fn.attr if isinstance(fn, ast.Attribute)
+                      and isinstance(fn.value, ast.Name)
+                      and fn.value.id == "page_flow" else
+                      fn.id if isinstance(fn, ast.Name) else None)
+            if callee == "classify":
+                seen += 1
+                if not any(k.arg == "status" for k in node.keywords) \
+                        and len(node.args) < 2:
+                    bad.append(node.lineno)
+            elif callee == "_classify":
+                seen += 1
+                if len(node.args) < 3 and not any(
+                        k.arg == "status" for k in node.keywords):
+                    bad.append(node.lineno)
+        ok &= check("%s: %d classify call(s), all pass a status (missing at "
+                    "%s)" % (name, seen, bad or "none"), seen and not bad)
+    return ok
+
+
+def test_counting_flags_reject_nonsense():
+    group("counting and delay flags reject negative values in every engine")
+    import argparse as _ap
+    ok = True
+    want = {"--pages": "page_flow.at_least_one",
+            "--concurrency": "page_flow.at_least_one",
+            "--delay": "page_flow.non_negative_float",
+            "--retry-delay": "page_flow.non_negative_float",
+            "--proxy-block-retries": "page_flow.non_negative_int"}
+    api_want = {"--retries": "page_flow.non_negative_int",
+                "--retry-delay": "page_flow.non_negative_int",
+                "--timeout": "page_flow.at_least_one"}
+    for name, flags in [(n, want) for n in _ENGINE_MODULES] + [
+            ("scraper_api_client", api_want)]:
+        tree = ast.parse(open(os.path.join(REPO_ROOT, name + ".py"),
+                              encoding="utf-8").read())
+        types_ = {}
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Call)
+                    and getattr(node.func, "attr", "") == "add_argument"
+                    and node.args and isinstance(node.args[0], ast.Constant)):
+                types_[node.args[0].value] = next(
+                    (ast.unparse(k.value) for k in node.keywords
+                     if k.arg == "type"), None)
+        wrong = {f: types_.get(f) for f, t in flags.items()
+                 if types_.get(f) != t}
+        ok &= check("%s validates %s (wrong: %s)"
+                    % (name, ", ".join(sorted(flags)), wrong or "none"),
+                    not wrong)
+    for fn, bad, good in [(page_flow.at_least_one, (0, -1, "x"), ("1", 3)),
+                          (page_flow.non_negative_int, (-1, "x", "1.5"),
+                           ("0", 2)),
+                          (page_flow.non_negative_float,
+                           (-0.5, "nan", "inf", "x"), ("0", "2.5"))]:
+        for b in bad:
+            ok &= check("%s refuses %r" % (fn.__name__, b),
+                        _raises_type(lambda: fn(b), _ap.ArgumentTypeError))
+        for g in good:
+            ok &= check("%s accepts %r" % (fn.__name__, g),
+                        not _raises(lambda: fn(g)))
+    # And argparse names the flag in the message a user sees.
+    p = _ap.ArgumentParser(prog="probe")
+    p.add_argument("--pages", type=page_flow.at_least_one)
+    err = io.StringIO()
+    from contextlib import redirect_stderr
+    try:
+        with redirect_stderr(err):
+            p.parse_args(["--pages", "-1"])
+        code = 0
+    except SystemExit as e:
+        code = e.code
+    ok &= check("--pages -1 is exit 2 naming the flag",
+                code == 2 and "argument --pages" in err.getvalue())
+    return ok
+
+
+def test_no_private_citations():
+    group("public files cite no private instruction files")
+    # The tokens are assembled from pieces so this file does not match itself.
+    banned = re.compile("|".join([
+        re.escape("CLAUDE" + ".md"),
+        "claude" + "_2scraper",
+        "2scraper" + "_repo_rules",
+        "play" + "book " + "§",
+        "template " + "§",
+        "§" + r" ?\d",
+        "family " + "notes",
+    ]), re.IGNORECASE)
+    try:
+        tracked = subprocess.run(["git", "ls-files"], cwd=REPO_ROOT,
+                                 capture_output=True, text=True,
+                                 check=True).stdout.split()
+    except (OSError, subprocess.CalledProcessError):
+        tracked = []
+    if not tracked:
+        # Not a git checkout (a release tarball): read what is on disk.
+        tracked = [os.path.relpath(os.path.join(dp, f), REPO_ROOT)
+                   for dp, dn, fs in os.walk(REPO_ROOT)
+                   if ".git" not in dp.split(os.sep)
+                   for f in fs]
+    hits = []
+    for rel in tracked:
+        path = os.path.join(REPO_ROOT, rel)
+        try:
+            text = open(path, encoding="utf-8").read()
+        except (OSError, UnicodeDecodeError):
+            continue
+        for n, line in enumerate(text.splitlines(), 1):
+            if banned.search(line):
+                hits.append("%s:%d" % (rel, n))
+    for h in hits[:10]:
+        print("        %s" % h)
+    return check("no tracked file cites a private instruction file or one of "
+                 "its sections (%d file(s) read)" % len(tracked),
+                 tracked and not hits)
+
+
 def main() -> int:
     ok = True
     # Checks that could not run because an optional engine library is absent.
@@ -3112,7 +3620,7 @@ def main() -> int:
     ok &= test_proxy_pool()
     ok &= test_engines(skips)
     ok &= test_pyppeteer_teardown_noise()
-    ok &= test_canary_separates_access_from_defect()
+    ok &= test_canary_requires_a_real_test()
     ok &= test_ci_checks_is_actually_wired_up()
     ok &= test_no_capture_leaks()
     ok &= test_wording()
@@ -3128,6 +3636,10 @@ def main() -> int:
     ok &= test_writes_are_atomic()
     ok &= test_csv_formulas_are_neutralised()
     ok &= test_cdp_failure_hint_names_the_real_cause()
+    ok &= test_engine_fetch_loop_is_driven()
+    ok &= test_status_reaches_every_classify_call()
+    ok &= test_counting_flags_reject_nonsense()
+    ok &= test_no_private_citations()
 
     print()
     if _failures:

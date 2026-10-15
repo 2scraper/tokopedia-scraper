@@ -217,7 +217,7 @@ differences are real rather than oversights:
 | | difference |
 |---|---|
 | pyppeteer | no `--fingerprint` / `--fp-country` / `--fp-tags` / `--locale`; adds `--chromium-path`. `--concurrency` is accepted for parity and ignored. |
-| Selenium | no `--locale`; adds `--no-sandbox` and `--disable-dev-shm-usage`. `--concurrency` is accepted for parity and ignored. `--cdp-endpoint` and an authenticated `--proxy` do not work at all — see below. |
+| Selenium | no `--locale`. It always launches Chrome with the `--no-sandbox` and `--disable-dev-shm-usage` browser options (set in code, not CLI flags). `--concurrency` is accepted for parity and ignored. `--cdp-endpoint` and an authenticated `--proxy` do not work at all — see below. |
 
 | Flag | Default | What it does |
 |---|---|---|
@@ -357,7 +357,7 @@ contradict it. An empty CSV still carries its header.
 
 ### Exit codes
 
-    0  ok            3  blocked                5  remote API error
+    0  ok            3  blocked                5  content not obtained
     1  crash         4  zero products          6  partial
     2  bad usage
 
@@ -365,6 +365,14 @@ contradict it. An empty CSV still carries its header.
 to get a legitimately empty page: a `/p/<slug>` discovery hub, a search whose
 query matches nothing, and one page past the end of a category listing. All
 three are exit 4. Exit 3 means the site sent nothing at all.
+
+Exit 5 means no rows AND the content was never obtained, so nothing can be
+concluded about the catalogue: a page that would not load, a remote service
+error (`profile_locked`), a page Tokopedia served that never painted a grid,
+a product or a no-results message (`page_never_painted`), or a page holding
+tiles that the parser returned zero rows from (`parser_found_nothing`). The
+last two end a run with rows already gathered as exit 6, never as a
+complete one. `stop_reason` in the sidecar names which.
 
 ---
 
@@ -514,11 +522,13 @@ verified to parse identically to the untrimmed original, and the checks pin
 **values** — the expected price, rating, sold count and title for named
 products — because a column can be 100% populated and entirely wrong.
 
-The canary (`canary.yml`) is `workflow_dispatch` only. It needs a Scraping
-Browser endpoint, and the credential in one does not survive a day, so a
-nightly run would go red every night once it expired — and a check that is
-always red teaches everyone to ignore checks. When the secret is absent it
-**skips** with a notice rather than failing.
+The canary (`canary.yml`) is `workflow_dispatch` only for now. It needs a
+Scraping Browser endpoint in the `TOKOPEDIA_CDP_ENDPOINT` secret, because a
+GitHub runner is a datacentre address and Tokopedia sends it nothing. When the
+secret is absent the canary **fails** with an error naming it, and a blocked,
+refused, partial or zero-row run fails too: it passes only when it parsed real
+rows from three live pages. A green badge therefore means the site was
+tested.
 
 ---
 

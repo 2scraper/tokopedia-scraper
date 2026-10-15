@@ -25,10 +25,11 @@ name: canary
 # address, so this canary gates on TOKOPEDIA_CDP_ENDPOINT — the Scraping
 # Browser API — and a proxy secret would not be enough even if one were set.
 #
-# The live steps are SKIPPED, not failed, when the secret is absent. The job
-# goes green with a notice saying why. A check that is always red teaches
-# everyone to ignore checks, which is worse than having no check at all. Set
-# the secret and the same workflow starts doing real work with no edit:
+# Without the secret this job FAILS, naming the secret it needs. It used to
+# skip and go green with a notice, and its only run ever was that skip: a
+# green badge over a canary that had never reached the site. A canary that
+# did not test the site must not read as one that did. Set the secret and
+# the same workflow does real work with no edit:
 #
 #     gh secret set TOKOPEDIA_CDP_ENDPOINT --repo 2scraper/tokopedia-scraper
 #
@@ -45,23 +46,13 @@ name: canary
 # loader already treats as "not configured", so there is no commented-out
 # line for someone to forget to uncomment.
 #
-# ON DEMAND, NOT ON A SCHEDULE — forced by the credential rather than chosen.
-#
-# A Scraping Browser endpoint on this account does not survive a day: every
-# credential inherited from the sibling repos in this family was already
-# returning 401 `deny_no_user` when this repo was written. A daily cron
-# against a credential with that lifetime produces one of two useless
-# outcomes: a red badge every day (if a dead endpoint fails the job), or a
-# green badge every day that has tested nothing (if it does not). The second
-# is the more dangerous, because green reads as "the parser still works".
-#
-# So the schedule is off. Dispatch it by hand, with a fresh secret, when the
-# answer matters — before a release, or when someone reports the parser
-# missing a column.
-#
-# Put the schedule back the day a long-lived credential exists:
+# ON DEMAND for now. With no secret set, a scheduled run would be red every
+# day for a reason already known; once TOKOPEDIA_CDP_ENDPOINT exists, add a
+# schedule so the site is checked without anyone remembering to:
 #     schedule:
 #       - cron: "23 6 * * *"
+# Dispatch it by hand before a release, or when someone reports the parser
+# missing a column.
 on:
   workflow_dispatch:
 
@@ -75,20 +66,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Explain a skipped run
+      - name: Require the live-access secret
         if: env.HAVE_CDP != 'true'
         run: |
-          echo "::notice::Skipping the live run: no TOKOPEDIA_CDP_ENDPOINT secret is set."
+          echo "::error::The TOKOPEDIA_CDP_ENDPOINT secret is not set, so this canary cannot reach Tokopedia and has tested nothing. Set it: gh secret set TOKOPEDIA_CDP_ENDPOINT --repo 2scraper/tokopedia-scraper"
           echo "Tokopedia answers an address it has scored with NOTHING — no status"
           echo "code, no interstitial, no error page — and a GitHub runner is a"
-          echo "datacentre address. A run from here would be red every time"
-          echo "whatever the state of the code. Set a Scraping Browser API"
-          echo "endpoint (with a pid reserved for CI) to turn this canary on:"
-          echo
-          echo "    gh secret set TOKOPEDIA_CDP_ENDPOINT --repo 2scraper/tokopedia-scraper"
-          echo
-          echo "The offline suite (tests.yml) covers everything that does not"
-          echo "need the network, and it runs on every push."
+          echo "datacentre address, so the live run needs a Scraping Browser API"
+          echo "endpoint (with a pid reserved for CI). This job fails rather than"
+          echo "skipping, because a skipped canary is not a tested success."
+          echo "### Canary did NOT run: TOKOPEDIA_CDP_ENDPOINT is not set" >> "$GITHUB_STEP_SUMMARY"
+          exit 1
 
       - uses: actions/setup-python@v5
         if: env.HAVE_CDP == 'true'
@@ -145,56 +133,39 @@ jobs:
       - name: Interpret the exit code
         id: verdict
         if: env.HAVE_CDP == 'true'
-        # ACCESS CONDITIONS ARE NOT DEFECTS, and on this site that
-        # distinction decides whether the badge means anything.
+        # ONLY EXIT 0 PASSES. Every other code means the site was not tested
+        # end to end, and a canary that did not test the site must not end
+        # green. Each one still says in words what happened, in the log and
+        # in the step summary:
         #
-        # Failing the job on ANY non-zero exit makes the canary red for two
-        # things that are nobody's bug:
-        #
-        #   * the SECRET EXPIRED. A Scraping Browser credential is not
-        #     forever — every one inherited from the sibling repos was
-        #     already dead when this repo was written. When it stops
-        #     authenticating the run exits 5.
-        #   * ACCESS IS INTERMITTENT PER PROFILE, and a profile allows one
-        #     live connection. A canary that collides with a person's run
-        #     exits 5 with `profile_locked`, which says nothing about the
-        #     site or the code.
-        #
-        # So: 3 (blocked), 5 (remote API error) and 6 (partial) are reported
-        # as WARNINGS and do not fail the job. What stays red is a run that
-        # got in and found the wrong thing, or one that broke:
-        #
-        #   1  crashed
-        #   2  the workflow's own arguments are wrong
+        #   3  blocked: the site sent nothing (access, or the pid is scored)
+        #   5  nothing obtained: endpoint refused (expired secret,
+        #      profile_locked), a page that never painted, or a page whose
+        #      tiles parsed to zero rows
+        #   6  partial: pages missing, so pagination was not proven
         #   4  served a page and parsed ZERO rows from a category listing
-        #      that holds 60 per page — the tile anchor moved, which is
-        #      exactly what this canary exists to catch
-        #
-        # A warning must not read as a pass, either. Each one writes to the
-        # step summary as well, so the run page says in words that the canary
-        # did not actually test anything this time.
+        #      that holds 60 per page — the tile anchor moved
+        #   1  crashed;  2  the workflow's own arguments are wrong
         run: |
           set -e
           code="${{ steps.run.outputs.exit_code }}"
-          tested=true
+          tested=false
           case "$code" in
             0)
+              tested=true
               echo "OK — products parsed from a live run." ;;
             3)
-              tested=false
-              echo "::warning::Blocked before parsing (exit 3) — an ACCESS condition, not a code defect, so this run is not failed. On this site a block means the site sent NOTHING: there is no challenge to solve and no key would help. Check the debug dump's byte count in the artefacts — 0 bytes means the request never got a response. Try a different --cdp-endpoint pid."
-              echo "### Canary did NOT test anything (exit 3, blocked)" >> "$GITHUB_STEP_SUMMARY"
-              echo "Tokopedia did not serve the request, so the parser was not exercised. This is access, not a regression — but it also means the site-side check did not happen." >> "$GITHUB_STEP_SUMMARY" ;;
+              echo "::error::Blocked before parsing (exit 3) — the site was NOT tested. On this site a block means the site sent NOTHING: there is no challenge to solve and no key would help. Check the debug dump's byte count in the artefacts — 0 bytes means the request never got a response. Try a different --cdp-endpoint pid."
+              echo "### Canary did NOT test the site (exit 3, blocked)" >> "$GITHUB_STEP_SUMMARY"
+              exit 1 ;;
             5)
-              tested=false
-              echo "::warning::Remote API error (exit 5) — the Scraping Browser endpoint refused the connection, so nothing was tested and this run is not failed. If the log says 'profile_locked', another run still holds this pid: give CI its own. Otherwise the TOKOPEDIA_CDP_ENDPOINT secret has most likely expired and needs refreshing."
-              echo "### Canary did NOT test anything (exit 5, endpoint refused)" >> "$GITHUB_STEP_SUMMARY"
-              echo "The most likely cause is an expired \`TOKOPEDIA_CDP_ENDPOINT\` secret. Refresh it, or remove it to go back to the explicit SKIP path." >> "$GITHUB_STEP_SUMMARY" ;;
+              echo "::error::Nothing obtained (exit 5) — the site was NOT tested. If the log says 'profile_locked', another run still holds this pid: give CI its own. If the endpoint refused the connection, the TOKOPEDIA_CDP_ENDPOINT secret has most likely expired and needs refreshing. If the sidecar's stop_reason is page_never_painted or parser_found_nothing, the page was served and the parser or the readiness wait is at fault."
+              echo "### Canary did NOT test the site (exit 5)" >> "$GITHUB_STEP_SUMMARY"
+              exit 1 ;;
             6)
-              tested=false
-              echo "::warning::Partial run (exit 6) — some pages were gathered and the run then stopped early, usually the remote target closing mid-scroll. canary_run.meta.json names which pages failed. Not failed, because on this site that is an access condition; if it repeats on every run, suspect pagination instead."
+              echo "::error::Partial run (exit 6) — some pages were gathered and the run then stopped early. canary_run.meta.json names which pages failed and why (stop_reason). Pagination was not proven by this run."
               echo "### Canary tested only PART of the run (exit 6)" >> "$GITHUB_STEP_SUMMARY"
-              echo "See \`pages_failed\` in the sidecar artefact." >> "$GITHUB_STEP_SUMMARY" ;;
+              exit 1 ;;
             4)
               echo "::error::Ran fine but parsed 0 rows (exit 4) on a category listing that holds 60 products per page. Either the grid container (data-ssr=productsCategoryL2/L3SSR) or the tile anchor (a[data-testid=lnkProductContainer]) has moved — this is the regression this canary exists to catch. The HTML dump in the artefacts tells you which."
               exit 1 ;;
@@ -208,9 +179,8 @@ jobs:
           echo "tested=$tested" >> "$GITHUB_OUTPUT"
 
       - name: Sanity-check the scraped data
-        # Only when the run actually got in. On a blocked or refused run
-        # there is no output file to check, and a missing file would fail for
-        # the wrong reason.
+        # Only when the run actually got in; every other outcome has already
+        # failed the job in the step above, with its own message.
         if: env.HAVE_CDP == 'true' && steps.verdict.outputs.tested == 'true'
         # Exit 0 only means "some rows were written". It says nothing about
         # whether the page actually rendered: a snapshot taken too early

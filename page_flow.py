@@ -103,8 +103,8 @@ READY_SELECTOR_LISTING = (
 READY_SELECTOR_PRODUCT = '[data-testid="lblPDPProductNameJumper"], h1'
 
 # How many matches mean "the grid rendered". Must be > 1: waiting for a
-# single match resolves on an unrelated link long before the grid paints
-# (§5). Tokopedia hydrates in batches of 60, so 4 is reached the moment the
+# single match resolves on an unrelated link long before the grid paints.
+# Tokopedia hydrates in batches of 60, so 4 is reached the moment the
 # first batch lands and is nowhere near the batch boundary.
 MIN_CARD_MATCHES = 4
 MIN_CARD_MATCHES_PRODUCT = 1
@@ -132,7 +132,7 @@ def content_timeout_ms(mode: str) -> int:
 # ---------------------------------------------------------------------------
 # The lazy-load scroll
 # ---------------------------------------------------------------------------
-# §8's rule, and every clause of it was earned somewhere in this family:
+# Every clause of this rule was earned somewhere in this family:
 #
 #   * Scroll to `document.body.scrollHeight`, not a fixed wheel distance. A
 #     2400px wheel stopped three rounds short of the bottom of a 7600px grid
@@ -242,9 +242,9 @@ def classify(html: Optional[str], status: Optional[int] = None,
     """The page's state, in one place, for all three engines.
 
     `status` is OPTIONAL, and that default is load-bearing rather than
-    tidy. Playwright hands back a response object with a status on it;
-    pyppeteer and Selenium do not expose one at the point this is called, so
-    they pass only the markup. When `status` was required positionally both
+    tidy. Playwright and pyppeteer pass the status of the navigation's
+    response; Selenium (WebDriver) exposes none, so it passes None and is
+    judged by the markup alone. When `status` was required positionally both
     of those engines crashed with `TypeError` on their FIRST fetch — and
     that was invisible to import, to `--help`, to `compileall`, to the AST
     undefined-name walk and to 426 green offline checks, because none of
@@ -302,11 +302,35 @@ def should_parse(state: str) -> bool:
     return STATE_POLICY.get(state, STATE_POLICY["unknown"])["parse"]
 
 
+def not_obtained_reason(state: str, rows) -> Optional[str]:
+    """Why a page that yielded no rows did NOT answer "nothing here", or None.
+
+    Only an "empty" page is a real zero: a no-results message, a hub, one
+    page past the end. Everything else that reaches the parse with no rows
+    is a failure to obtain the content, and the run must say so (exit 5, or
+    6 with earlier rows) rather than report an empty catalogue (exit 4):
+
+      * "content" — the page held tiles or a product, and the parser
+        returned nothing from them: `parser_found_nothing`;
+      * "unknown" — served, but with no grid, no product and no no-results
+        message after every retry and the paint wait: `page_never_painted`.
+    """
+    if rows:
+        return None
+    if state == "empty":
+        return None
+    if state == "content":
+        return "parser_found_nothing"
+    if state == "unknown":
+        return "page_never_painted"
+    return "page_not_obtained"
+
+
 def is_unpainted(state: str, html: Optional[str]) -> bool:
     """Whether this page is "not painted yet" rather than actually wrong.
 
     This distinction is load-bearing and the first live run of the search
-    path is what found it. §8 says missing content is one of three things —
+    path is what found it. Missing content is one of three things —
     not painted, lazy-loaded, or a different page served to this session —
     and the two Tokopedia page kinds differ in WHICH:
 
@@ -344,6 +368,44 @@ BLOCK_RETRIES_WITHOUT_POOL = 1
 SOLVES_PER_PAGE = 1
 
 
+class SolveBudget:
+    """The per-page allowance for paid solves, shared by every call site.
+
+    Each engine asks the solver from two places on every attempt: once
+    before the page is classified, so a challenge is cleared before anything
+    is judged, and once after, for the state that says the page really is
+    gated. Both take this object and claim from it IMMEDIATELY BEFORE the
+    paid request is sent. Counting only the second call site let the first
+    one buy a solve on every block-retry: three purchases against a limit of
+    one on a page that stayed a challenge.
+
+    Claimed only at the point of purchase, not per call: detecting nothing,
+    finding the content already rendered, or having no API key claims
+    nothing, so the pre-classification call cannot use up the allowance a
+    late-rendering challenge needs. A claim the solver then refuses or fails
+    still counts — it was a request sent, and possibly billed.
+
+    One object per PAGE, created before the retry loop, and never reset on
+    a retry or a proxy rotation: a fresh exit is a reason to re-fetch, not a
+    fresh allowance to spend.
+    """
+
+    def __init__(self, limit: int = SOLVES_PER_PAGE):
+        self.limit = limit
+        self.spent = 0
+
+    def claim(self) -> bool:
+        """True and count one purchase if the allowance has room, else False."""
+        if self.spent >= self.limit:
+            return False
+        self.spent += 1
+        return True
+
+    @property
+    def exhausted(self) -> bool:
+        return self.spent >= self.limit
+
+
 # ---------------------------------------------------------------------------
 # Pagination
 # ---------------------------------------------------------------------------
@@ -363,12 +425,12 @@ SOLVES_PER_PAGE = 1
 #
 # That last part is the trap. A `page_url()` used unconditionally would fetch
 # that empty page, find no new sku, conclude the listing was exhausted, and
-# report a COMPLETE run holding page 1 — §7's silent-single-page failure
+# report a COMPLETE run holding page 1 — the silent single-page failure
 # arriving by a different route. So an engine must ask
 # `pagination_is_addressable` BEFORE it plans page URLs, and fall back to
 # scrolling one long page when the answer is no.
 NEXT_PAGE_SELECTOR: List[str] = [
-    # Ordered most-durable first, per §5 — standards-based signals before
+    # Ordered most-durable first — standards-based signals before
     # build artefacts. NONE of these has ever matched on Tokopedia: the list
     # is here so that if the site ever grows real pagination markup the
     # engines pick it up, and every entry is honestly marked as unobserved.
@@ -505,7 +567,7 @@ def cdp_failure_hint(text: str) -> str:
     low = (text or "").lower()
     if "401" in low or "deny_no_user" in low or "unauthorized" in low:
         return ("The endpoint refused the credentials (HTTP 401). A Scraping "
-                "Browser profile's login expires after about a day - fetch a "
+                "Browser profile's login has expired or is wrong - fetch a "
                 "fresh endpoint and update TOKOPEDIA_CDP_ENDPOINT.")
     if any(k in low for k in ("enotfound", "getaddrinfo", "name or service",
                               "nodename nor servname", "name resolution")):
@@ -565,4 +627,45 @@ def attempts(value) -> int:
             f"not re-tries, so --retries 1 means 'try once and do not retry'. "
             f"With 0 the load loop never runs, nothing is fetched, and the "
             f"engine reports the browser's blank page as a result.")
+    return number
+
+
+# argparse `type=` validators for the other counting flags. argparse names
+# the flag itself ("argument --pages: ..."), so the message only has to say
+# what was wrong with the value. A negative page count, delay or retry budget
+# used to be accepted and then either fetched nothing (--pages 0 reported an
+# empty catalogue) or crashed in time.sleep() mid-run (a negative delay).
+def _number(value, kind):
+    try:
+        return kind(value)
+    except (TypeError, ValueError):
+        raise _argparse.ArgumentTypeError(
+            f"expected {'an integer' if kind is int else 'a number'}, "
+            f"not {value!r}")
+
+
+def at_least_one(value) -> int:
+    """`type=` for flags that count pages or workers: 1 or more."""
+    number = _number(value, int)
+    if number < 1:
+        raise _argparse.ArgumentTypeError(
+            f"must be at least 1, not {number}")
+    return number
+
+
+def non_negative_int(value) -> int:
+    """`type=` for flags that count EXTRA attempts: 0 is legal, -1 is not."""
+    number = _number(value, int)
+    if number < 0:
+        raise _argparse.ArgumentTypeError(
+            f"must be 0 or more, not {number}")
+    return number
+
+
+def non_negative_float(value) -> float:
+    """`type=` for delays in seconds: 0 is legal, a negative wait is not."""
+    number = _number(value, float)
+    if not (number >= 0 and number != float("inf")):  # refuses nan and inf
+        raise _argparse.ArgumentTypeError(
+            f"must be 0 or more seconds, not {value}")
     return number

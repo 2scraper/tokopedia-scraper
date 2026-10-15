@@ -115,6 +115,14 @@ class PageOutcome:
     products: List = field(default_factory=list)
     blocked_by: Optional[str] = None
     load_failed: bool = False
+    # Set when the page was reached but its content was NOT obtained, so a
+    # zero-row page cannot pass for an empty catalogue:
+    #   page_never_painted    Tokopedia served something with no grid, no
+    #                         product and no no-results message on it, and
+    #                         every retry came back the same
+    #   parser_found_nothing  the page held tiles (or a product) and the
+    #                         parser returned zero rows from it
+    not_obtained: Optional[str] = None
     state: Optional[str] = None
     # Always None on this site: Tokopedia publishes no result total. Kept so
     # the sidecar's shape matches the family's.
@@ -130,7 +138,23 @@ class PageOutcome:
 
     @property
     def ok(self) -> bool:
-        return not self.load_failed and self.blocked_by is None
+        return (not self.load_failed and self.blocked_by is None
+                and self.not_obtained is None)
+
+    @property
+    def stop_reason(self) -> str:
+        """Why the run has to stop at this page; "completed" if it need not."""
+        if self.load_failed:
+            return "page_load_timeout"
+        if self.blocked_by is not None:
+            return f"blocked_{self.blocked_by}"
+        return self.not_obtained or "completed"
+
+
+# WebDriver exposes no HTTP status for a navigation, so this engine judges a
+# page by its markup alone. Passed by name at every classify() call so the
+# omission is visibly deliberate, and checked as such by the offline suite.
+NO_HTTP_STATUS = None
 
 
 # Every `scheme://user:pass@` in a string, however many times it occurs.
@@ -416,7 +440,7 @@ def _next_page_candidates(session, page_num: int) -> List[str]:
                                           hrefs or [])
 
 
-def handle_captcha_if_present(session, args) -> bool:
+def handle_captcha_if_present(session, args, budget) -> bool:
     """Detect and solve a challenge. True if something was solved.
 
     Same detectors, same reconciliation and the same "detected is not
@@ -455,6 +479,13 @@ def handle_captcha_if_present(session, args) -> bool:
         logger.warning("No 2captcha API key, so this challenge cannot be solved.")
         return False
     try:
+        # Claimed HERE, immediately before the paid request, and not per
+        # call: a call that detects nothing or has no key buys nothing.
+        if not budget.claim():
+            logger.warning("%s still on the page, but this page's solve "
+                           "allowance (%d) is spent — not buying another.",
+                           challenge.kind, budget.limit)
+            return False
         token = solve_recaptcha(challenge, args.twocaptcha_key,
                                 api_version=args.captcha_api,
                                 min_score=args.min_score)
@@ -495,10 +526,10 @@ def _fetch_one_page(session, args, pool, page_num: int, url: str) -> PageOutcome
     block_retries = 0 if not page_flow.RETRY_ON_BLOCKED else (
         args.proxy_block_retries if has_pool
         else page_flow.BLOCK_RETRIES_WITHOUT_POOL)
-    # Counted across the whole block-retry loop, not per attempt: a page that
-    # keeps coming back as a challenge would otherwise buy one solve per
-    # rotation, which is how a run quietly turns into a bill.
-    solves_bought = 0
+    # ONE allowance for the whole block-retry loop and for BOTH solve call
+    # sites, claimed just before a purchase and never reset by a retry or a
+    # rotation. See page_flow.SolveBudget.
+    budget = page_flow.SolveBudget()
 
     for block_attempt in range(block_retries + 1):
         logger.info("Fetching page %d/%d: %s", page_num, args.pages, url)
@@ -534,11 +565,11 @@ def _fetch_one_page(session, args, pool, page_num: int, url: str) -> PageOutcome
             break
 
 
-        if handle_captcha_if_present(session, args):
+        if handle_captcha_if_present(session, args, budget):
             time.sleep(1)
 
         html = d["content"]() or ""
-        state = page_flow.classify(html, url=d["current_url"]())
+        state = page_flow.classify(html, status=NO_HTTP_STATUS, url=d["current_url"]())
 
         # "Not painted yet" is not a fault. A SEARCH grid arrives with the
         # client-side GraphQL response, so at domcontentloaded the page is a
@@ -560,7 +591,7 @@ def _fetch_one_page(session, args, pool, page_num: int, url: str) -> PageOutcome
                 logger.info("The grid still had not painted after %.0fs "
                             "(%d match(es)).", wait_s, found)
             html = d["content"]() or html
-            state = page_flow.classify(html, url=d["current_url"]())
+            state = page_flow.classify(html, status=NO_HTTP_STATUS, url=d["current_url"]())
 
         # No interstitial-settling step, and its absence is measured rather
         # than an omission: Tokopedia has no interstitial. An address it has
@@ -571,13 +602,11 @@ def _fetch_one_page(session, args, pool, page_num: int, url: str) -> PageOutcome
         # capture of this site has ever produced. Wired up because a bot
         # manager can be switched on between deploys, and bounded by
         # SOLVES_PER_PAGE so a speculative path cannot become a bill.
-        if (page_flow.should_solve(state)
-                and solves_bought < page_flow.SOLVES_PER_PAGE):
-            solves_bought += 1
-            if handle_captcha_if_present(session, args):
+        if page_flow.should_solve(state) and not budget.exhausted:
+            if handle_captcha_if_present(session, args, budget):
                 time.sleep(1)
                 html = d["content"]() or html
-                state = page_flow.classify(html, url=d["current_url"]())
+                state = page_flow.classify(html, status=NO_HTTP_STATUS, url=d["current_url"]())
                 if state == "content":
                     logger.info("The solve was accepted — page %d is content "
                                 "now.", page_num)
@@ -597,12 +626,25 @@ def _fetch_one_page(session, args, pool, page_num: int, url: str) -> PageOutcome
         # so a different exit is the only thing that plausibly changes the
         # outcome.
         if block_attempt < block_retries:
-            logger.warning("Page %d came back as %s from %s — retrying from "
-                           "another exit (%d/%d).", page_num, state,
-                           mask(pool.current), block_attempt + 1, block_retries)
-            pool.advance(f"{state} on page {page_num}")
-            session.relaunch()
-            d = _driver(session)
+            if has_pool:
+                logger.warning("Page %d came back as %s from %s — retrying "
+                               "from another exit (%d/%d).", page_num, state,
+                               mask(pool.current), block_attempt + 1,
+                               block_retries)
+                pool.advance(f"{state} on page {page_num}")
+                session.relaunch()
+                d = _driver(session)
+            else:
+                # No pool, so nowhere else to go — a plain re-fetch through
+                # the same access path, without a relaunch. Mirrors
+                # playwright_scraper; reaching for `pool.current` here was an
+                # AttributeError on the first block of a run with no --proxy.
+                pause = args.retry_delay * (block_attempt + 1)
+                logger.warning("Page %d came back as %s — re-fetching through "
+                               "the same access path in %.1fs (%d/%d).",
+                               page_num, state, pause, block_attempt + 1,
+                               block_retries)
+                time.sleep(pause)
 
     if load_failed:
         logger.error("Gave up loading %s after %d attempt(s).", url, args.retries)
@@ -781,6 +823,16 @@ def _fetch_one_page(session, args, pool, page_num: int, url: str) -> PageOutcome
                     page_num, with_image, len(products),
                     100.0 * with_image / len(products))
 
+    # A zero-row page is an empty catalogue ONLY when the site said so.
+    # A page holding tiles that parsed to nothing, or a page that never
+    # painted, is content not obtained — see page_flow.not_obtained_reason.
+    outcome.not_obtained = page_flow.not_obtained_reason(state, products)
+    if outcome.not_obtained:
+        logger.error("Page %d yielded no rows and is NOT an empty result "
+                     "(%s, state %s) — the run reports it as a failed page, "
+                     "not as an empty catalogue.", page_num,
+                     outcome.not_obtained, state)
+
     if not products:
         debug_html = f"{args.out}_page{page_num}_debug.html"
         with open(debug_html, "w", encoding="utf-8") as f:
@@ -803,11 +855,8 @@ def scrape(args) -> int:
     blocked = False
     # Both modes are one row per product, so `sku` is the key for both.
     dedupe_key = "sku"
-    # Only --mode product is single-page. A SHOP FRONT paginates exactly like
-    # a category listing — ?page=N, the same tiles — and treating it as
-    # single-page made `--mode shop --pages 2` fetch one page and report
-    # "complete", which is the silent-success failure this family exists to
-    # avoid. Found on the first live shop run.
+    # Only --mode product is single-page; a listing keeps fetching until its
+    # pages run out, so a short run is never reported "complete" by fiat.
     stop_reason = "single_page_mode" if args.mode == "product" else "completed"
 
     pool = proxy_pool_from_args(args)
@@ -829,8 +878,7 @@ def scrape(args) -> int:
         outcomes.append(first)
 
         if not first.ok:
-            stop_reason = ("page_load_timeout" if first.load_failed
-                           else f"blocked_{first.blocked_by}")
+            stop_reason = first.stop_reason
             blocked = first.blocked_by is not None
         elif args.mode == "listing":
             seen_keys.update(p.sku for p in first.products if p.sku is not None)
@@ -869,8 +917,7 @@ def scrape(args) -> int:
                 outcome = _fetch_one_page(session, args, pool, page_num, url)
                 outcomes.append(outcome)
                 if not outcome.ok:
-                    stop_reason = ("page_load_timeout" if outcome.load_failed
-                                   else f"blocked_{outcome.blocked_by}")
+                    stop_reason = outcome.stop_reason
                     blocked = outcome.blocked_by is not None
                     break
 
@@ -1007,16 +1054,16 @@ def parse_args():
                         "carry. No --pages in product mode. There is "
                         "deliberately no shop mode; see playwright_scraper.")
     p.add_argument("--category", default=None, help="Label to tag output rows with.")
-    p.add_argument("--pages", type=int, default=1, help="Listing pages to crawl")
-    p.add_argument("--delay", type=float, default=2.0, help="Delay between pages, seconds")
-    p.add_argument("--concurrency", type=int, default=1, metavar="N",
+    p.add_argument("--pages", type=page_flow.at_least_one, default=1, help="Listing pages to crawl")
+    p.add_argument("--delay", type=page_flow.non_negative_float, default=2.0, help="Delay between pages, seconds")
+    p.add_argument("--concurrency", type=page_flow.at_least_one, default=1, metavar="N",
                    help="Accepted for flag parity and IGNORED here: parallel "
                         "page fetching lives in playwright_scraper.py.")
     p.add_argument("--retries", type=page_flow.attempts, default=3,
                    help="Attempts per page load before giving up (default 3). "
                         "A page that comes back EMPTY is not retried: an empty "
                         "hub category is a correct answer, not a fault.")
-    p.add_argument("--retry-delay", type=float, default=2.0,
+    p.add_argument("--retry-delay", type=page_flow.non_negative_float, default=2.0,
                    help="Seconds before the first retry, doubling thereafter")
     p.add_argument("--format", choices=["json", "csv", "both"], default="both")
     p.add_argument("--out", default="tokopedia_products", help="Output file prefix")
@@ -1030,7 +1077,7 @@ def parse_args():
                         "Wins over --proxy.")
     p.add_argument("--proxy-rotate", choices=list(ROTATE_MODES), default="per-run")
     p.add_argument("--proxy-shuffle", action="store_true")
-    p.add_argument("--proxy-block-retries", type=int, default=2)
+    p.add_argument("--proxy-block-retries", type=page_flow.non_negative_int, default=2)
     p.add_argument("--twocaptcha-key", default=None, help="2captcha.com API key")
     p.add_argument("--allow-empty", action="store_true",
                    help="Write output files even when 0 rows were found.")
