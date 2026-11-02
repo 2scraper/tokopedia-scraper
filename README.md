@@ -1,4 +1,6 @@
-# tokopedia-scraper
+# Tokopedia Scraper — Product Prices, Sold Counts and Shops in Python
+
+**Tokopedia scraper** — an open-source (MIT) Python tool that reads tokopedia.com search grids, category listings and product pages and writes IDR price, original price, rating, sold count, shop and shop location to JSON or CSV. Measured 2026-09-10, Tokopedia reset the connection from a residential German address without any status code, and the Scraping Browser API (`--cdp-endpoint`) is the path that works: every measurement in the README was taken through it. Use it for price monitoring on Tokopedia, or compare two runs with `diff_runs.py`.
 
 Tokopedia product scraper — search grids, category listings and product pages
 — with three interchangeable browser engines, JSON/CSV output and a
@@ -545,6 +547,23 @@ tested.
   there is nothing measured to label — that is absence of evidence, not
   evidence of absence, and a grid that has them should be captured before a
   column is added.
+
+## Guides
+
+- [How to run the 2scraper scrapers: setup, proxies, exit codes and access modes](https://2captcha.com/h/how-to-run-2scraper-open-source-scrapers) — installation, `.env`, `.meta.json` for the whole family.
+
+## Related scrapers
+
+Same CLI conventions, same output contract (one row per item, JSON or CSV, a `.meta.json` sidecar and shared exit codes):
+
+- [Tractor Supply scraper](https://github.com/2scraper/tractorsupply-scraper) — Categories, departments and searches
+- [Woolworths scraper](https://github.com/2scraper/woolworths-scraper) — Prices, unit prices, specials, health star ratings…
+- [Amazon scraper](https://github.com/2scraper/amazon-scraper) — Search results, best-seller grids, product pages and reviews…
+- [Andie Swim scraper](https://github.com/2scraper/andieswim-scraper) — Collections, keyword lookups and per-size stock…
+- [Bershka scraper](https://github.com/2scraper/bershka-scraper) — Every SKU in a Bershka category
+- [Catawiki scraper](https://github.com/2scraper/catawiki-scraper) — Auction lots, bids, reserves, estimates and sellers…
+
+All scrapers: [github.com/2scraper](https://github.com/2scraper) · Need another site? [Open a request](https://github.com/2scraper/.github/issues/new?title=%5BScraper%20request%5D%20)
 
 ## Licence and scope
 
