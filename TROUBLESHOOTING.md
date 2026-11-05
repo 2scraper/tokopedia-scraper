@@ -21,10 +21,13 @@ is reset. No status code, no interstitial, no challenge, no error page.
 A real browser gets the same treatment as curl, so it is not a TLS or HTTP/2
 fingerprint problem — it is the address.
 
-**What fixes it: any residential exit. The country does not matter.** An
-Indonesian exit (`country-id`) and a US one (`country-us`) both returned HTTP
-200 and 95 products, with identical markup and zero price differences across
-the 68 products both runs saw.
+**What fixed it, measured 2026-09-10: the Scraping Browser API
+(`--cdp-endpoint`).** Through it an Indonesian exit (`country-id`) and a US one
+(`country-us`) both returned HTTP 200 and 95 products, with identical markup
+and zero price differences across the 68 products both runs saw. That does
+not make every residential address work: the address above was residential
+and got the reset, and a browser through the 2Captcha residential proxy
+gateway timed out (next section). Other residential exits are untested.
 
 **What does NOT fix it:**
 

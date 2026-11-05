@@ -13,6 +13,19 @@ with it, so nobody discovers it from a bill or from a diff.
 
 ## [Unreleased]
 
+### Changed
+
+- **The canary now runs weekly** (Tuesdays, 06:41 UTC) as well as on demand,
+  through the Scraping Browser API. It had only ever run by hand, and its last
+  run (2026-10-15) failed because the endpoint secret was not set; the secret
+  now exists. Tuesday keeps it clear of sibling canaries that share one
+  Scraping Browser profile on Mondays.
+- **The access notes no longer say "any residential exit" clears the block.**
+  What was measured on 2026-09-10 is the Scraping Browser API from an
+  Indonesian and a US exit; a residential German address got the connection
+  reset and a browser through the residential proxy gateway timed out. README,
+  TROUBLESHOOTING and the canary's own comments now state just that.
+
 ## [0.2.0] — 2026-10-15
 
 > **Behaviour change:** `--retries 0` is now a usage error (exit 2). It used

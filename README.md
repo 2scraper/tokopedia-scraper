@@ -8,11 +8,11 @@ run-metadata sidecar.
 
 [![release](https://img.shields.io/github/v/release/2scraper/tokopedia-scraper?sort=semver)](https://github.com/2scraper/tokopedia-scraper/releases)
 [![tests](https://github.com/2scraper/tokopedia-scraper/actions/workflows/tests.yml/badge.svg)](https://github.com/2scraper/tokopedia-scraper/actions/workflows/tests.yml)
-[![canary (on demand)](https://github.com/2scraper/tokopedia-scraper/actions/workflows/canary.yml/badge.svg)](https://github.com/2scraper/tokopedia-scraper/actions/workflows/canary.yml)
+[![canary (weekly)](https://github.com/2scraper/tokopedia-scraper/actions/workflows/canary.yml/badge.svg)](https://github.com/2scraper/tokopedia-scraper/actions/workflows/canary.yml)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue?logo=python&logoColor=white)
 ![licence](https://img.shields.io/badge/licence-MIT-green)
 ![engines](https://img.shields.io/badge/engines-Playwright%20%7C%20Selenium%20%7C%20Puppeteer-blueviolet)
-![access](https://img.shields.io/badge/needs-a%20residential%20exit-orange)
+![access](https://img.shields.io/badge/measured%20path-Scraping%20Browser%20API-orange)
 
 ---
 
@@ -38,7 +38,12 @@ machine in the same minute: `www.etsy.com` 403, `www.mediamarkt.de` 403,
 A 403 is a refusal the site took the trouble to send; Tokopedia sends nothing.
 The CDN is Akamai (`www.tokopedia.com` → `…edgesuite.net` → `…akamai.net`).
 
-**What clears it: any residential exit. The country does not matter.**
+**What cleared it, measured 2026-09-10: the Scraping Browser API
+(`--cdp-endpoint`), from an Indonesian and from a US exit alike.** That is two
+exits through one managed browser, not every residential address: the
+residential German address above got the stream reset, and a browser through
+the 2Captcha residential proxy gateway timed out (see below). Other residential
+exits are untested.
 
 |  | `country-id` | `country-us` |
 |---|---|---|
@@ -49,8 +54,8 @@ The CDN is Akamai (`www.tokopedia.com` → `…edgesuite.net` → `…akamai.net
 | currency on tiles | IDR (`Rp`) | IDR (`Rp`) |
 | price differences across the 68 products both runs saw | — | **0** |
 
-So **there is no geo-redirect and no per-country storefront**: one site, one
-language, one currency, whatever exit you arrive from. That is why there is no
+So **there is no geo-redirect and no per-country storefront**: the two exits
+got one site, one language, one currency. That is why there is no
 `--country` flag — it could only disagree with the URL.
 
 ### What this means for your run
@@ -524,7 +529,8 @@ verified to parse identically to the untrimmed original, and the checks pin
 **values** — the expected price, rating, sold count and title for named
 products — because a column can be 100% populated and entirely wrong.
 
-The canary (`canary.yml`) is `workflow_dispatch` only for now. It needs a
+The canary (`canary.yml`) runs weekly (Tuesdays, 06:41 UTC) and on demand,
+through the Scraping Browser API with a US exit. It needs a
 Scraping Browser endpoint in the `TOKOPEDIA_CDP_ENDPOINT` secret, because a
 GitHub runner is a datacentre address and Tokopedia sends it nothing. When the
 secret is absent the canary **fails** with an error naming it, and a blocked,

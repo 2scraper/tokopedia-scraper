@@ -1517,13 +1517,16 @@ def test_canary_requires_a_real_test():
                 "TOKOPEDIA_CDP_ENDPOINT: ${{ secrets.TOKOPEDIA_CDP_ENDPOINT }}"
                 in wf)
 
-    # The schedule stays off until the secret exists, and says so; the
-    # retracted "an endpoint does not survive a day" claim is not the reason.
+    # The secret exists now, so the canary runs on a schedule as well as by
+    # hand: a canary nobody remembers to dispatch catches nothing. The
+    # retracted "an endpoint does not survive a day" claim stays out.
     ok &= check("it is dispatchable by hand", "workflow_dispatch:" in wf)
-    ok &= check("the schedule decision is written down without the retracted "
-                "credential-lifetime claim",
-                "survive a day" not in wf
-                and "once TOKOPEDIA_CDP_ENDPOINT exists, add a" in wf)
+    sched = re.search(r"^on:\n(?:  .*\n)*?  schedule:\n\s+- cron: \"[^\"]+\"",
+                      wf, re.M)
+    ok &= check("it runs on a schedule, with the reason written down and "
+                "without the retracted credential-lifetime claim",
+                sched is not None and "WEEKLY" in wf
+                and "survive a day" not in wf)
     ok &= check("the expired-secret case is named",
                 "expired" in wf.lower() and "refresh" in wf.lower())
     return ok
