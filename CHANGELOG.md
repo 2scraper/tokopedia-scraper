@@ -15,6 +15,8 @@ with it, so nobody discovers it from a bill or from a diff.
 
 ### Changed
 
+- CI only: the offline-checks job runs on `ubuntu-24.04` instead of `ubuntu-latest`, which moved to Ubuntu 26.04, where `actions/setup-python` has no Python 3.9 build. 3.9 stays the supported floor.
+- Docker: the image installs `libatomic1` before Playwright. Recent Playwright releases' Node driver needs it to run `playwright install` at all, and the slim base image does not ship it, so the image build failed.
 - **The canary now runs weekly** (Tuesdays, 06:41 UTC) as well as on demand,
   through the Scraping Browser API. It had only ever run by hand, and its last
   run (2026-10-15) failed because the endpoint secret was not set; the secret
